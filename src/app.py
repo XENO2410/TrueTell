@@ -10,9 +10,11 @@ import time
 from datetime import datetime
 import numpy as np
 from typing import Dict, List
+import asyncio
 from utils import download_nltk_data
 from fact_checker import FactChecker
 from source_checker import SourceChecker
+from realtime_processor import RealTimeProcessor
 from dotenv import load_dotenv
 
 # Load environment variables and download NLTK data
@@ -35,14 +37,12 @@ class MisinformationDetector:
         try:
             tokens = word_tokenize(text)
             
-            # Basic filtering without POS tagging
             basic_terms = [word for word in tokens 
                           if word.isalnum() 
                           and word.lower() not in self.stop_words
                           and len(word) > 2]
             
             try:
-                # Try POS tagging
                 pos_tags = nltk.pos_tag(tokens)
                 key_terms = [word for word, pos in pos_tags 
                             if (pos.startswith('NN') or pos.startswith('JJ')) 
@@ -78,7 +78,6 @@ class MisinformationDetector:
         results = []
         
         for sentence in sentences:
-            # Classification analysis
             classification = self.classifier(
                 sentence,
                 candidate_labels=[
@@ -88,24 +87,17 @@ class MisinformationDetector:
                 ]
             )
             
-            # Sentiment analysis
             sentiment = self.sentiment_analyzer(sentence)[0]
-            
-            # Fact checking
             fact_check_results = self.fact_checker.check_claim(sentence)
-            
-            # Source checking for URLs
             urls = self._extract_urls(sentence)
             source_checks = [self.source_checker.check_source(url) for url in urls]
             
-            # Calculate risk score
             risk_score = self.calculate_risk_score(
                 classification['scores'],
                 fact_check_results['credibility_score'],
                 sentiment
             )
             
-            # Extract key terms
             key_terms = self.extract_key_terms(sentence)
             
             results.append({
@@ -124,7 +116,6 @@ class MisinformationDetector:
         return results
 
 def create_analysis_charts(results: List[Dict]):
-    # Create risk timeline
     df = pd.DataFrame(results)
     fig_timeline = px.line(
         df,
@@ -133,7 +124,6 @@ def create_analysis_charts(results: List[Dict]):
         title='Risk Score Timeline'
     )
     
-    # Create classification distribution
     classifications = []
     scores = []
     for result in results:
@@ -150,6 +140,10 @@ def create_analysis_charts(results: List[Dict]):
     return fig_timeline, fig_dist
 
 def display_live_results(results: List[Dict]):
+    if not results:
+        st.warning("No results to display yet. Start monitoring to see analysis.")
+        return
+
     col1, col2, col3 = st.columns(3)
     
     avg_risk = np.mean([r['risk_score'] for r in results])
@@ -165,9 +159,54 @@ def display_live_results(results: List[Dict]):
         high_risk_count = sum(1 for r in results if r['risk_score'] > 0.7)
         st.metric("High Risk Statements", high_risk_count)
     
-    fig_timeline, fig_dist = create_analysis_charts(results)
-    st.plotly_chart(fig_timeline)
-    st.plotly_chart(fig_dist)
+    # Create timeline chart
+    if len(results) > 0:
+        df = pd.DataFrame([{
+            'timestamp': datetime.strptime(r['timestamp'], "%Y-%m-%d %H:%M:%S"),
+            'risk_score': r['risk_score'],
+            'text': r['sentence'][:50] + '...'
+        } for r in results])
+        
+        fig_timeline = px.line(
+            df,
+            x='timestamp',
+            y='risk_score',
+            title='Risk Score Timeline',
+            hover_data=['text']
+        )
+        st.plotly_chart(fig_timeline)
+    
+    # Display latest analyses
+    st.subheader("Latest Analyses")
+    for result in results[-5:]:  # Show last 5 results
+        with st.expander(f"Analysis for: {result['sentence'][:100]}..."):
+            col1, col2 = st.columns([2, 1])
+            
+            with col1:
+                st.write("**Classification Breakdown:**")
+                for cls, score in zip(result['classifications'], result['classification_scores']):
+                    st.write(f"- {cls}: {score:.2%}")
+                st.write("**Key Terms:**", ", ".join(result['key_terms']))
+            
+            with col2:
+                st.metric("Risk Score", f"{result['risk_score']:.2%}")
+                if result['risk_score'] > 0.7:
+                    st.error("⚠️ High Risk Content!")
+                elif result['risk_score'] > 0.4:
+                    st.warning("⚠️ Medium Risk Content")
+
+async def process_live_feed(processor, placeholder, results):
+    """Process live feed data"""
+    for i in range(5):
+        live_text = f"This is a simulated live feed message {i+1}. " \
+                    f"{'Some misleading content.' if i % 2 else 'Factual content.'}"
+        
+        processor.add_text(live_text, source="Live Feed")
+        await asyncio.sleep(2)
+        
+        # Update the display
+        with placeholder.container():
+            display_live_results(results)
 
 def text_analysis_tab():
     st.title("🔍 Real-time Misinformation Detector")
@@ -229,23 +268,92 @@ def live_monitor_tab():
         ["Live News Feed", "Social Media Stream", "Custom Input"]
     )
     
+    if 'monitoring_results' not in st.session_state:
+        st.session_state.monitoring_results = []
+    
+    placeholder = st.empty()
+    
     if source_type == "Live News Feed":
-        placeholder = st.empty()
-        
         if st.button("Start Monitoring"):
+            # Sample live feed data
+            live_feeds = [
+                "Breaking news: Major technological breakthrough announced in renewable energy.",
+                "Scientists discover new species in the Amazon rainforest.",
+                "Controversial statement: Social media platform implements new policy changes.",
+                "ALERT: Unverified reports of unusual weather patterns emerging globally.",
+                "Latest update: Stock market shows unexpected movements after policy announcement."
+            ]
+            
             with st.spinner("Monitoring live feed..."):
-                results = []
-                for i in range(5):
-                    live_text = f"This is a simulated live feed message {i+1}. " \
-                              f"{'Some misleading content.' if i % 2 else 'Factual content.'}"
+                for feed in live_feeds:
+                    # Analyze the feed using existing detector
+                    results = st.session_state.detector.analyze_text(feed)
+                    st.session_state.monitoring_results.extend(results)
                     
-                    new_results = st.session_state.detector.analyze_text(live_text)
-                    results.extend(new_results)
+                    # Update display
+                    with placeholder.container():
+                        display_live_results(st.session_state.monitoring_results)
+                        
+                        # Show latest feed
+                        st.subheader("Latest Feed")
+                        st.info(feed)
+                        
+                        # Show real-time metrics
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Active Feeds", len(st.session_state.monitoring_results))
+                        with col2:
+                            avg_risk = np.mean([r['risk_score'] for r in st.session_state.monitoring_results])
+                            st.metric("Average Risk", f"{avg_risk:.2%}")
+                        with col3:
+                            high_risk = sum(1 for r in st.session_state.monitoring_results if r['risk_score'] > 0.7)
+                            st.metric("High Risk Alerts", high_risk)
+                    
+                    time.sleep(2)  # Simulate real-time delay
+    
+    elif source_type == "Social Media Stream":
+        if st.button("Start Monitoring"):
+            # Sample social media posts
+            social_posts = [
+                "Just heard that AI will replace all jobs by next year! #tech #future",
+                "New study shows regular exercise improves mental health. #health #wellness",
+                "SHOCKING: Celebrity reveals conspiracy theory about government! #news",
+                "Beautiful sunset at the beach today! 🌅 #nature #peace",
+                "This miracle product cures everything! Buy now! #health #promotion"
+            ]
+            
+            with st.spinner("Monitoring social media..."):
+                for post in social_posts:
+                    results = st.session_state.detector.analyze_text(post)
+                    st.session_state.monitoring_results.extend(results)
                     
                     with placeholder.container():
-                        display_live_results(results)
+                        display_live_results(st.session_state.monitoring_results)
+                        
+                        st.subheader("Latest Social Media Post")
+                        st.info(post)
+                        
+                        # Show hashtag analysis
+                        hashtags = [tag for tag in post.split() if tag.startswith('#')]
+                        if hashtags:
+                            st.write("Trending Hashtags:", ', '.join(hashtags))
                     
                     time.sleep(2)
+    
+    elif source_type == "Custom Input":
+        custom_input = st.text_area("Enter custom text to monitor:")
+        if st.button("Analyze Custom Input"):
+            if custom_input:
+                results = st.session_state.detector.analyze_text(custom_input)
+                st.session_state.monitoring_results.extend(results)
+                
+                with placeholder.container():
+                    display_live_results(st.session_state.monitoring_results)
+    
+    # Add reset button
+    if st.button("Reset Monitoring"):
+        st.session_state.monitoring_results = []
+        placeholder.empty()
 
 def main():
     st.set_page_config(page_title="Real-time Misinformation Detector", 
