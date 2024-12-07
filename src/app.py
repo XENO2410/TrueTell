@@ -11,6 +11,7 @@ from datetime import datetime
 import numpy as np
 from typing import Dict, List
 import asyncio
+import os
 from utils import download_nltk_data
 from fact_checker import FactChecker
 from source_checker import SourceChecker
@@ -18,6 +19,15 @@ from realtime_processor import RealTimeProcessor
 from dotenv import load_dotenv
 from dashboard import DashboardManager
 from alert_system import AlertSystem
+from integration_layer import (
+    IntegrationLayer,
+    APIIntegration,
+    WebhookIntegration,
+    SlackIntegration,
+    EmailIntegration
+)
+import requests
+from datetime import datetime
 
 # Load environment variables and download NLTK data
 load_dotenv()
@@ -32,6 +42,34 @@ class MisinformationDetector:
         self.fact_checker = FactChecker()
         self.source_checker = SourceChecker()
         self.alert_system = AlertSystem()
+        
+        # Initialize integration layer
+        self.integration_layer = IntegrationLayer()
+        
+        # Register integrations (you'll need to add your actual credentials)
+        self.setup_integrations()
+    
+    def setup_integrations(self):
+        """Setup integration providers"""
+        # Example API integration
+        api_integration = APIIntegration(
+            api_key=os.getenv("API_KEY"),
+            base_url=os.getenv("API_BASE_URL")
+        )
+        self.integration_layer.register_provider("api", api_integration)
+        
+        # Example Slack integration
+        slack_integration = SlackIntegration(
+            slack_token=os.getenv("SLACK_TOKEN"),
+            channel=os.getenv("SLACK_CHANNEL")
+        )
+        self.integration_layer.register_provider("slack", slack_integration)
+        
+        # Example webhook integration
+        webhook_integration = WebhookIntegration(
+            webhook_url=os.getenv("WEBHOOK_URL")
+        )
+        self.integration_layer.register_provider("webhook", webhook_integration)
         
     def preprocess_text(self, text: str) -> List[str]:
         return sent_tokenize(text)
@@ -117,10 +155,20 @@ class MisinformationDetector:
             }
             results.append(result)
         
-            # Generate alerts for the analysis result
-            alerts = self.alert_system.check_content(result)
-            if alerts:
-                st.warning(f"Generated {len(alerts)} new alert(s)!")
+        # Generate alerts and send through integration layer
+        alerts = self.alert_system.check_content(result)
+        if alerts:
+            for alert in alerts:
+                alert_data = {
+                    'message': alert.message,
+                    'risk_score': alert.risk_score,
+                    'timestamp': alert.timestamp,
+                    'source_text': alert.source_text
+                }
+                asyncio.create_task(
+                    self.integration_layer.send_alerts(alert_data)
+                )
+            st.warning(f"Generated {len(alerts)} new alert(s)!")
         
         return results
 
@@ -147,6 +195,184 @@ def create_analysis_charts(results: List[Dict]):
     )
     
     return fig_timeline, fig_dist
+
+def integration_settings_tab():
+    st.title("🔌 Integration Settings")
+    
+    # API Integration Settings
+    st.header("API Integration")
+    
+    # Advanced API Configuration
+    with st.expander("API Configuration", expanded=True):
+        api_key = st.text_input("API Key", type="password")
+        api_url = st.text_input("API Base URL")
+        
+        # Authentication Method
+        auth_method = st.selectbox(
+            "Authentication Method",
+            ["API Key as Parameter", "Bearer Token", "Basic Auth", "No Auth"]
+        )
+        
+        # Request Configuration
+        col1, col2 = st.columns(2)
+        with col1:
+            request_method = st.selectbox("Request Method", ["GET", "POST", "PUT", "DELETE"])
+            api_endpoint = st.text_input("Endpoint (e.g., /v1/test)", "/")
+        with col2:
+            param_key = st.text_input("API Key Parameter Name (if required)", "apiKey")
+            content_type = st.selectbox("Content Type", [
+                "application/json",
+                "application/x-www-form-urlencoded",
+                "multipart/form-data"
+            ])
+    
+    # Test API button
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("Test API"):
+            if api_url:  # Only URL is mandatory
+                with st.spinner("Testing API connection..."):
+                    try:
+                        # Prepare headers
+                        headers = {"Content-Type": content_type}
+                        
+                        # Handle different auth methods
+                        params = {}
+                        if auth_method == "API Key as Parameter":
+                            params[param_key] = api_key
+                        elif auth_method == "Bearer Token":
+                            headers["Authorization"] = f"Bearer {api_key}"
+                        elif auth_method == "Basic Auth":
+                            headers["Authorization"] = f"Basic {api_key}"
+                        
+                        # Prepare URL
+                        full_url = f"{api_url.rstrip('/')}{api_endpoint}"
+                        
+                        # Test data for POST/PUT requests
+                        test_data = {
+                            "message": "Test alert",
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        
+                        # Make request based on method
+                        if request_method == "GET":
+                            response = requests.get(
+                                full_url,
+                                headers=headers,
+                                params=params
+                            )
+                        elif request_method == "POST":
+                            response = requests.post(
+                                full_url,
+                                headers=headers,
+                                params=params,
+                                json=test_data if content_type == "application/json" else None,
+                                data=test_data if content_type != "application/json" else None
+                            )
+                        elif request_method == "PUT":
+                            response = requests.put(
+                                full_url,
+                                headers=headers,
+                                params=params,
+                                json=test_data if content_type == "application/json" else None,
+                                data=test_data if content_type != "application/json" else None
+                            )
+                        else:  # DELETE
+                            response = requests.delete(
+                                full_url,
+                                headers=headers,
+                                params=params
+                            )
+                        
+                        # Display response
+                        if response.status_code in [200, 201, 202]:
+                            st.success(f"✅ API connection successful! Status: {response.status_code}")
+                            try:
+                                st.json(response.json())
+                            except:
+                                st.text(response.text)
+                        else:
+                            st.error(f"❌ API test failed: {response.status_code}")
+                            st.text(f"Response: {response.text}")
+                            
+                    except Exception as e:
+                        st.error(f"❌ API test failed: {str(e)}")
+            else:
+                st.warning("Please enter API Base URL")
+    
+    # Slack Integration Settings
+    st.header("Slack Integration")
+    slack_token = st.text_input("Slack Token", type="password")
+    slack_channel = st.text_input("Slack Channel")
+    slack_message = st.text_area("Slack Message", "🔍 Test message from Misinformation Detector!")
+
+    # Test Slack button
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("Send to Slack"):
+            if slack_token and slack_channel and slack_message:
+                with st.spinner("Sending message to Slack..."):
+                    try:
+                        headers = {
+                            "Authorization": f"Bearer {slack_token}",
+                            "Content-Type": "application/json"
+                        }
+                        message_data = {
+                            "channel": slack_channel,
+                            "text": slack_message
+                        }
+                        response = requests.post(
+                            "https://slack.com/api/chat.postMessage",
+                            headers=headers,
+                            json=message_data
+                        )
+                        if response.ok:
+                            st.success("✅ Slack message sent successfully!")
+                        else:
+                            st.error(f"❌ Slack send failed: {response.json().get('error', '')}")
+                    except Exception as e:
+                        st.error(f"❌ Slack send failed: {str(e)}")
+            else:
+                st.warning("Please enter Slack credentials and message")
+
+    # Webhook Integration Settings
+    st.header("Webhook Integration")
+    webhook_url = st.text_input("Webhook URL")
+    webhook_message = st.text_area("Webhook Message", "Test webhook alert")
+
+    # Test Webhook button
+    col1, col2 = st.columns([1, 5])
+    with col1:
+        if st.button("Send to Webhook"):
+            if webhook_url and webhook_message:
+                with st.spinner("Sending webhook..."):
+                    try:
+                        test_data = {
+                            "message": webhook_message,
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        }
+                        response = requests.post(webhook_url, json=test_data)
+                        if response.ok:
+                            st.success("✅ Webhook message sent successfully!")
+                        else:
+                            st.error(f"❌ Webhook send failed: {response.status_code}")
+                    except Exception as e:
+                        st.error(f"❌ Webhook send failed: {str(e)}")
+            else:
+                st.warning("Please enter webhook URL and message")
+
+    # Save all settings
+    if st.button("Save All Settings"):
+        if any([api_key, api_url, slack_token, slack_channel, webhook_url]):
+            # Save settings to session state or environment
+            st.session_state.integration_settings = {
+                "api": {"key": api_key, "url": api_url},
+                "slack": {"token": slack_token, "channel": slack_channel},
+                "webhook": {"url": webhook_url}
+            }
+            st.success("✅ All settings saved successfully!")
+        else:
+            st.warning("Please enter at least one integration setting")
 
 def display_live_results(results: List[Dict]):
     if not results:
@@ -570,12 +796,13 @@ def main():
     if 'dashboard_manager' not in st.session_state:
         st.session_state.dashboard_manager = DashboardManager()
     
-    # Create four tabs instead of three
-    tab1, tab2, tab3, tab4 = st.tabs([
+    # Create tabs
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "Text Analysis", 
         "Live Monitor", 
         "Dashboard",
-        "Alerts"
+        "Alerts",
+        "Integrations"
     ])
     
     with tab1:
@@ -589,6 +816,9 @@ def main():
     
     with tab4:
         alerts_tab()
+    
+    with tab5:
+        integration_settings_tab()
 
 if __name__ == "__main__":
     main()
