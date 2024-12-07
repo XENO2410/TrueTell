@@ -16,6 +16,7 @@ from fact_checker import FactChecker
 from source_checker import SourceChecker
 from realtime_processor import RealTimeProcessor
 from dotenv import load_dotenv
+from dashboard import DashboardManager
 
 # Load environment variables and download NLTK data
 load_dotenv()
@@ -318,7 +319,12 @@ def text_analysis_tab():
         if text_input:
             with st.spinner("Analyzing text..."):
                 results = st.session_state.detector.analyze_text(text_input)
-                
+     
+                # Store results in session state
+                if 'monitoring_results' not in st.session_state:
+                    st.session_state.monitoring_results = []
+                st.session_state.monitoring_results.extend(results)
+                           
                 st.header("Analysis Results")
                 
                 for result in results:
@@ -360,6 +366,10 @@ def text_analysis_tab():
 
 def live_monitor_tab():
     st.title("📡 Live Broadcast Monitor")
+    
+    # Initialize monitoring results if not exists
+    if 'monitoring_results' not in st.session_state:
+        st.session_state.monitoring_results = []
     
     source_type = st.selectbox(
         "Select Source",
@@ -453,20 +463,34 @@ def live_monitor_tab():
         st.session_state.monitoring_results = []
         placeholder.empty()
 
+def dashboard_tab():
+    """Display the dashboard tab content"""
+    st.session_state.dashboard_manager.display_dashboard(
+        st.session_state.get('monitoring_results', [])
+    )
+    
 def main():
     st.set_page_config(page_title="Real-time Misinformation Detector", 
                        layout="wide")
     
+    # Initialize session state objects
     if 'detector' not in st.session_state:
         st.session_state.detector = MisinformationDetector()
     
-    tab1, tab2 = st.tabs(["Text Analysis", "Live Monitor"])
+    if 'dashboard_manager' not in st.session_state:
+        st.session_state.dashboard_manager = DashboardManager()
+    
+    # Create three tabs instead of two
+    tab1, tab2, tab3 = st.tabs(["Text Analysis", "Live Monitor", "Dashboard"])
     
     with tab1:
         text_analysis_tab()
     
     with tab2:
         live_monitor_tab()
+    
+    with tab3:
+        dashboard_tab()
 
 if __name__ == "__main__":
     main()
