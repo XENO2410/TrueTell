@@ -1,14 +1,16 @@
 # src/fact_checker.py
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 import requests
 from datetime import datetime
 import os
+from credibility_scorer import CredibilityScorer
 
 class FactChecker:
     def __init__(self):
         self.google_api_key = os.getenv('GOOGLE_FACT_CHECK_API_KEY')
         self.news_api_key = os.getenv('NEWS_API_KEY')
         self.credible_domains = self._load_credible_domains()
+        self.scorer = CredibilityScorer()
 
     def _load_credible_domains(self) -> Dict[str, float]:
         return {
@@ -19,11 +21,24 @@ class FactChecker:
             'theguardian.com': 0.85,
         }
 
-    def check_claim(self, claim: str) -> Dict:
+    def check_claim(self, claim: str, classification_scores: List[float] = None, 
+                   sentiment_score: Dict = None) -> Dict:
+        # Default scores if not provided
+        if classification_scores is None:
+            classification_scores = [0.5, 0.3, 0.2]
+        if sentiment_score is None:
+            sentiment_score = {'label': 'NEUTRAL', 'score': 0.5}
+
+        # Get credibility analysis
+        credibility_analysis = self.scorer.calculate_credibility_score(
+            claim, classification_scores, sentiment_score
+        )
+
         results = {
             'claim': claim,
             'matches': self._check_against_database(claim),
-            'credibility_score': self._calculate_credibility_score(claim),
+            'credibility_score': credibility_analysis['final_score'],
+            'credibility_analysis': credibility_analysis,
             'timestamp': datetime.now().isoformat()
         }
         return results
@@ -34,17 +49,3 @@ class FactChecker:
             'rating': 'Unverified',
             'source': 'Internal Database'
         }]
-
-    def _calculate_credibility_score(self, text: str) -> float:
-        score = 0.5
-
-        for domain, trust_score in self.credible_domains.items():
-            if domain in text.lower():
-                score += trust_score * 0.3
-
-        if '"' in text or '"' in text:
-            score += 0.1
-        if any(word in text.lower() for word in ['according to', 'study shows', 'research']):
-            score += 0.1
-
-        return min(score, 1.0)

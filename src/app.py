@@ -144,56 +144,153 @@ def display_live_results(results: List[Dict]):
         st.warning("No results to display yet. Start monitoring to see analysis.")
         return
 
-    col1, col2, col3 = st.columns(3)
+    # Top metrics
+    col1, col2, col3, col4 = st.columns(4)
     
     avg_risk = np.mean([r['risk_score'] for r in results])
     avg_fact_check = np.mean([r['fact_check_results']['credibility_score'] for r in results])
+    avg_content_quality = np.mean([
+        r['fact_check_results']['credibility_analysis']['components']['content_quality'] 
+        for r in results
+    ])
     
     with col1:
         st.metric("Average Risk Score", f"{avg_risk:.2%}")
     
     with col2:
-        st.metric("Average Fact-Check Score", f"{avg_fact_check:.2%}")
+        st.metric("Average Credibility Score", f"{avg_fact_check:.2%}")
     
     with col3:
-        high_risk_count = sum(1 for r in results if r['risk_score'] > 0.7)
-        st.metric("High Risk Statements", high_risk_count)
+        st.metric("Content Quality", f"{avg_content_quality:.2%}")
     
-    # Create timeline chart
+    with col4:
+        high_risk_count = sum(1 for r in results if r['risk_score'] > 0.7)
+        st.metric("High Risk Alerts", high_risk_count)
+
+    # Timeline visualization
     if len(results) > 0:
+        # Create multi-line chart for risk and credibility scores
         df = pd.DataFrame([{
             'timestamp': datetime.strptime(r['timestamp'], "%Y-%m-%d %H:%M:%S"),
             'risk_score': r['risk_score'],
+            'credibility_score': r['fact_check_results']['credibility_score'],
             'text': r['sentence'][:50] + '...'
         } for r in results])
         
         fig_timeline = px.line(
             df,
             x='timestamp',
-            y='risk_score',
-            title='Risk Score Timeline',
-            hover_data=['text']
+            y=['risk_score', 'credibility_score'],
+            title='Risk and Credibility Score Timeline',
+            hover_data=['text'],
+            labels={'value': 'Score', 'variable': 'Metric'},
+            color_discrete_map={
+                'risk_score': 'red',
+                'credibility_score': 'green'
+            }
         )
         st.plotly_chart(fig_timeline)
-    
-    # Display latest analyses
+
+    # Latest Analysis Section
     st.subheader("Latest Analyses")
     for result in results[-5:]:  # Show last 5 results
         with st.expander(f"Analysis for: {result['sentence'][:100]}..."):
-            col1, col2 = st.columns([2, 1])
-            
+            # Main scores
+            col1, col2, col3 = st.columns([1, 1, 1])
             with col1:
-                st.write("**Classification Breakdown:**")
-                for cls, score in zip(result['classifications'], result['classification_scores']):
-                    st.write(f"- {cls}: {score:.2%}")
-                st.write("**Key Terms:**", ", ".join(result['key_terms']))
+                st.metric(
+                    "Risk Score", 
+                    f"{result['risk_score']:.2%}",
+                    delta=None,
+                    delta_color="inverse"
+                )
+            with col2:
+                st.metric(
+                    "Credibility Score",
+                    f"{result['fact_check_results']['credibility_score']:.2%}"
+                )
+            with col3:
+                sentiment_score = result['sentiment']['score']
+                sentiment_label = result['sentiment']['label']
+                st.metric(
+                    "Sentiment",
+                    f"{sentiment_label}",
+                    delta=f"{sentiment_score:.2%}"
+                )
+
+            # Detailed Analysis
+            st.markdown("### Detailed Analysis")
+            
+            # Classification breakdown
+            st.write("**Classification Breakdown:**")
+            for cls, score in zip(result['classifications'], 
+                                result['classification_scores']):
+                score_color = 'red' if cls == 'misleading information' and score > 0.5 else 'inherit'
+                st.markdown(
+                    f"- {cls}: <span style='color:{score_color}'>{score:.2%}</span>", 
+                    unsafe_allow_html=True
+                )
+
+            # Credibility Components
+            st.write("**Credibility Components:**")
+            cred_cols = st.columns(4)
+            components = result['fact_check_results']['credibility_analysis']['components']
+            for i, (name, score) in enumerate(components.items()):
+                with cred_cols[i]:
+                    st.metric(
+                        name.replace('_', ' ').title(),
+                        f"{score:.2%}"
+                    )
+
+            # Warning Flags
+            flags = result['fact_check_results']['credibility_analysis']['flags']
+            if flags:
+                st.warning("**Warning Flags:**")
+                for flag in flags:
+                    st.markdown(f"⚠️ {flag}")
+
+            # Key Terms and Recommendations
+            col1, col2 = st.columns(2)
+            with col1:
+                st.write("**Key Terms:**")
+                st.markdown(", ".join(result['key_terms']))
             
             with col2:
-                st.metric("Risk Score", f"{result['risk_score']:.2%}")
-                if result['risk_score'] > 0.7:
-                    st.error("⚠️ High Risk Content!")
-                elif result['risk_score'] > 0.4:
-                    st.warning("⚠️ Medium Risk Content")
+                recommendations = result['fact_check_results']['credibility_analysis']['analysis']['recommendations']
+                if recommendations:
+                    st.write("**Recommendations:**")
+                    for rec in recommendations:
+                        st.markdown(f"• {rec}")
+
+            # Risk Level Indicator
+            risk_level = result['fact_check_results']['credibility_analysis']['analysis']['risk_level']
+            if risk_level == "High":
+                st.error("🚨 High Risk Content Detected!")
+            elif risk_level == "Medium":
+                st.warning("⚠️ Medium Risk Content")
+            else:
+                st.success("✅ Low Risk Content")
+
+            # Summary
+            st.info(
+                f"**Analysis Summary:** {result['fact_check_results']['credibility_analysis']['analysis']['summary']}"
+            )
+
+    # Add export functionality
+    if len(results) > 0:
+        st.download_button(
+            label="Export Analysis Results",
+            data=pd.DataFrame([{
+                'timestamp': r['timestamp'],
+                'text': r['sentence'],
+                'risk_score': r['risk_score'],
+                'credibility_score': r['fact_check_results']['credibility_score'],
+                'risk_level': r['fact_check_results']['credibility_analysis']['analysis']['risk_level'],
+                'summary': r['fact_check_results']['credibility_analysis']['analysis']['summary']
+            } for r in results]).to_csv(index=False),
+            file_name=f"analysis_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime='text/csv'
+        )
 
 async def process_live_feed(processor, placeholder, results):
     """Process live feed data"""
@@ -259,6 +356,7 @@ def text_analysis_tab():
                         st.divider()
                 
                 display_live_results(results)
+
 
 def live_monitor_tab():
     st.title("📡 Live Broadcast Monitor")
