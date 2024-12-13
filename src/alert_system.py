@@ -175,7 +175,7 @@ class AlertSystem:
         ]
 
         if filtered_alerts:
-            for alert in filtered_alerts:
+            for idx, alert in enumerate(filtered_alerts):
                 with st.expander(f"{alert.type}: {alert.message} ({alert.timestamp})"):
                     col1, col2 = st.columns([3, 1])
                     
@@ -187,12 +187,12 @@ class AlertSystem:
                     with col2:
                         st.write("**Status:**", alert.status)
                         if alert.status != 'RESOLVED':
-                            if st.button("Mark Resolved", key=f"resolve_{alert.id}"):
+                            if st.button("Mark Resolved", key=f"resolve_{alert.id}_{idx}"):
                                 self.update_alert_status(alert.id, 'RESOLVED')
                                 st.rerun()
                             
                             if alert.status == 'NEW':
-                                if st.button("Acknowledge", key=f"ack_{alert.id}"):
+                                if st.button("Acknowledge", key=f"ack_{alert.id}_{idx}"):
                                     self.update_alert_status(alert.id, 'ACKNOWLEDGED')
                                     st.rerun()
         else:
@@ -222,7 +222,7 @@ class AlertSystem:
                     self.alert_thresholds['misleading_content']
                 )
 
-            if st.button("Update Thresholds"):
+            if st.button("Update Thresholds", key="update_thresholds"):
                 self.alert_thresholds.update({
                     'risk_score': new_risk_threshold,
                     'credibility_score': new_credibility_threshold,

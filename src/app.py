@@ -177,22 +177,28 @@ class MisinformationDetector:
                 'key_terms': key_terms,
                 'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
+            
+            # Check for alerts
+            alerts = self.alert_system.check_content(result)
+            if alerts:
+                for alert in alerts:
+                    st.warning(f"⚠️ Alert: {alert.message}")
+                    
+                    # Try to send alert through integration
+                    try:
+                        alert_data = {
+                            'message': alert.message,
+                            'risk_score': alert.risk_score,
+                            'timestamp': alert.timestamp,
+                            'source_text': alert.source_text,
+                            'severity': alert.severity,
+                            'type': alert.type
+                        }
+                        self.integration_layer.send_alerts_sync(alert_data)
+                    except Exception as e:
+                        st.error(f"Failed to send alert: {str(e)}")
+            
             results.append(result)
-        
-        # Generate alerts and send through integration layer
-        alerts = self.alert_system.check_content(result)
-        if alerts:
-            for alert in alerts:
-                alert_data = {
-                    'message': alert.message,
-                    'risk_score': alert.risk_score,
-                    'timestamp': alert.timestamp,
-                    'source_text': alert.source_text
-                }
-                asyncio.create_task(
-                    self.integration_layer.send_alerts(alert_data)
-                )
-            st.warning(f"Generated {len(alerts)} new alert(s)!")
         
         return results
 
@@ -807,6 +813,42 @@ def dashboard_tab():
 def alerts_tab():
     """Display the alerts dashboard"""
     st.title("🚨 Alert Management System")
+    
+    # Add threshold controls at the top
+    st.subheader("Alert Thresholds")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        new_risk = st.slider(
+            "Risk Score Threshold",
+            0.0, 1.0, 
+            st.session_state.detector.alert_system.alert_thresholds['risk_score'],
+            0.05
+        )
+    with col2:
+        new_cred = st.slider(
+            "Credibility Score Threshold",
+            0.0, 1.0,
+            st.session_state.detector.alert_system.alert_thresholds['credibility_score'],
+            0.05
+        )
+    with col3:
+        new_misleading = st.slider(
+            "Misleading Content Threshold",
+            0.0, 1.0,
+            st.session_state.detector.alert_system.alert_thresholds['misleading_content'],
+            0.05
+        )
+    
+    if st.button("Update Thresholds"):
+        st.session_state.detector.alert_system.alert_thresholds.update({
+            'risk_score': new_risk,
+            'credibility_score': new_cred,
+            'misleading_content': new_misleading
+        })
+        st.success("✅ Thresholds updated successfully!")
+    
+    # Display the alerts dashboard
     st.session_state.detector.alert_system.display_alerts_dashboard()
     
 def main():
@@ -820,29 +862,69 @@ def main():
     if 'dashboard_manager' not in st.session_state:
         st.session_state.dashboard_manager = DashboardManager()
     
-    # Create tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "Text Analysis", 
-        "Live Monitor", 
-        "Dashboard",
-        "Alerts",
-        "Integrations"
-    ])
+    # Add sidebar navigation
+    st.sidebar.title("Navigation")
     
-    with tab1:
+    # Add logo/header to sidebar (optional)
+    # st.sidebar.image("path_to_your_logo.png", width=100)  # Optional: Add your logo
+    # st.sidebar.markdown("---")  # Add a separator
+    
+    # Create navigation menu
+    nav_selection = st.sidebar.radio(
+        "Go to",
+        [
+            "🔍 Text Analysis",
+            "📡 Live Monitor",
+            "📊 Dashboard",
+            "🚨 Alerts",
+            "🔌 Integrations"
+        ]
+    )
+    
+    # Add additional sidebar info
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### System Status")
+    st.sidebar.metric(
+        "Active Alerts",
+        len(st.session_state.detector.alert_system.alerts)
+    )
+    
+    # Navigation logic
+    if nav_selection == "🔍 Text Analysis":
         text_analysis_tab()
     
-    with tab2:
+    elif nav_selection == "📡 Live Monitor":
         live_monitor_tab()
     
-    with tab3:
+    elif nav_selection == "📊 Dashboard":
         dashboard_tab()
     
-    with tab4:
+    elif nav_selection == "🚨 Alerts":
         alerts_tab()
     
-    with tab5:
+    elif nav_selection == "🔌 Integrations":
         integration_settings_tab()
+    
+    # Add footer to sidebar
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### About")
+    st.sidebar.info(
+        """
+        This is a real-time misinformation detection system.
+        Version: 1.0.0
+        """
+    )
+    
+    # Add help section to sidebar
+    with st.sidebar.expander("Need Help?"):
+        st.markdown("""
+        **Quick Start Guide:**
+        1. Use Text Analysis for single text analysis
+        2. Use Live Monitor for real-time monitoring
+        3. Check Dashboard for overall statistics
+        4. Monitor Alerts for important notifications
+        5. Configure Integrations for external connections
+        """)
 
 if __name__ == "__main__":
     main()
