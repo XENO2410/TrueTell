@@ -160,18 +160,9 @@ class KnowledgeGraph:
                 }
             }
 
-    def visualize(self, container=None, unique_id=None):
-        """
-        Visualize the knowledge graph using Plotly
-        Args:
-            container: Optional Streamlit container to render the visualization
-            unique_id: Unique identifier for the visualization instance
-        """
+    def visualize(self, container=None):
+        """Visualize the knowledge graph using Plotly"""
         try:
-            # Generate unique ID if not provided
-            if unique_id is None:
-                unique_id = datetime.now().strftime('%Y%m%d_%H%M%S_%f')
-    
             # Create position layout
             pos = nx.spring_layout(self.graph)
             
@@ -201,7 +192,8 @@ class KnowledgeGraph:
                         text=node_text,
                         textposition="top center",
                         hoverinfo='text',
-                        showlegend=True
+                        showlegend=True,
+                        textfont=dict(color='white')  # Make text white for visibility
                     )
     
             # Prepare edge trace
@@ -226,35 +218,45 @@ class KnowledgeGraph:
                 showlegend=False
             )
     
-            # Create figure
+            # Create figure with dark theme
             fig = go.Figure(
                 data=[edge_trace] + list(node_traces.values()),
                 layout=go.Layout(
-                    title='Knowledge Graph Visualization',
+                    title={
+                        'text': 'Knowledge Graph Visualization',
+                        'font': {'color': 'white'}
+                    },
                     showlegend=True,
                     hovermode='closest',
                     margin=dict(b=20,l=5,r=5,t=40),
-                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-                    plot_bgcolor='white'
+                    xaxis=dict(
+                        showgrid=False, 
+                        zeroline=False, 
+                        showticklabels=False,
+                        showline=False
+                    ),
+                    yaxis=dict(
+                        showgrid=False, 
+                        zeroline=False, 
+                        showticklabels=False,
+                        showline=False
+                    ),
+                    plot_bgcolor='rgb(17, 17, 17)',  # Dark background
+                    paper_bgcolor='rgb(17, 17, 17)',  # Dark background
+                    legend={
+                        'font': {'color': 'white'},
+                        'bgcolor': 'rgba(0,0,0,0)'
+                    }
                 )
             )
     
-            # Display in Streamlit with unique keys
+            # Display in Streamlit
             if container:
-                container.plotly_chart(
-                    fig, 
-                    use_container_width=True, 
-                    key=f"kg_plot_{unique_id}"
-                )
+                container.plotly_chart(fig, use_container_width=True)
             else:
-                st.plotly_chart(
-                    fig, 
-                    use_container_width=True, 
-                    key=f"kg_plot_{unique_id}"
-                )
+                st.plotly_chart(fig, use_container_width=True)
     
-            # Add statistics below visualization with unique keys
+            # Add statistics below visualization
             stats = self.get_statistics()
             if container:
                 col1, col2, col3 = container.columns(3)
@@ -262,32 +264,11 @@ class KnowledgeGraph:
                 col1, col2, col3 = st.columns(3)
     
             with col1:
-                st.metric(
-                    "Total Nodes", 
-                    stats['total_nodes'],
-                    key=f"total_nodes_{unique_id}"
-                )
+                st.metric("Total Nodes", stats['total_nodes'])
             with col2:
-                st.metric(
-                    "Total Relationships", 
-                    stats['total_edges'],
-                    key=f"total_edges_{unique_id}"
-                )
+                st.metric("Total Relationships", stats['total_edges'])
             with col3:
-                st.metric(
-                    "Entity Types", 
-                    len(stats['node_types']),
-                    key=f"entity_types_{unique_id}"
-                )
-    
-            # Add export button with unique key
-            if container:
-                if container.button(
-                    "Export Graph", 
-                    key=f"export_button_{unique_id}"
-                ):
-                    self.export_graph(f"knowledge_graph_{unique_id}.json")
-                    container.success("Graph exported successfully!")
+                st.metric("Entity Types", len(stats['node_types']))
     
             return True
     
@@ -400,3 +381,119 @@ class KnowledgeGraph:
                 'sources': [],
                 'related_claims': []
             }
+            
+    def analyze_claim_patterns(self) -> Dict:
+        """Analyze patterns in claims and their relationships"""
+        patterns = {
+            'common_entities': defaultdict(int),
+            'source_reliability': defaultdict(list),
+            'temporal_patterns': defaultdict(int),
+            'narrative_chains': []
+        }
+        
+        try:
+            # Analyze common entities
+            for node in self.graph.nodes():
+                if node.startswith('claim_'):
+                    for neighbor in self.graph.neighbors(node):
+                        if not neighbor.startswith('claim_'):
+                            patterns['common_entities'][neighbor] += 1
+            
+            # Analyze source reliability
+            for node in self.graph.nodes():
+                if node.startswith('source_'):
+                    attrs = self.graph.nodes[node]
+                    if 'reliability_score' in attrs:
+                        patterns['source_reliability'][node].append(
+                            attrs['reliability_score']
+                        )
+            
+            # Analyze temporal patterns
+            for node, attrs in self.graph.nodes(data=True):
+                if node.startswith('claim_'):
+                    timestamp = datetime.strptime(
+                        attrs['timestamp'], 
+                        '%Y-%m-%d %H:%M:%S'
+                    )
+                    patterns['temporal_patterns'][timestamp.hour] += 1
+            
+            # Find narrative chains
+            patterns['narrative_chains'] = self._find_narrative_chains()
+            
+            return patterns
+        
+        except Exception as e:
+            print(f"Error analyzing patterns: {e}")
+            return patterns
+    
+    def _find_narrative_chains(self) -> List[Dict]:
+        """Find chains of related claims that might form narratives"""
+        chains = []
+        visited = set()
+        
+        try:
+            for node in self.graph.nodes():
+                if node.startswith('claim_') and node not in visited:
+                    chain = self._explore_chain(node, visited)
+                    if len(chain) > 1:  # Only include chains with multiple claims
+                        chains.append(chain)
+            return chains
+        except Exception as e:
+            print(f"Error finding narrative chains: {e}")
+            return []
+    
+    def _explore_chain(self, start_node: str, visited: Set[str]) -> List[Dict]:
+        """Explore a chain of related claims"""
+        chain = []
+        queue = [(start_node, [])]
+        
+        while queue:
+            node, path = queue.pop(0)
+            if node not in visited:
+                visited.add(node)
+                
+                # Add node to chain
+                if node.startswith('claim_'):
+                    chain.append({
+                        'claim_id': node,
+                        'text': self.graph.nodes[node].get('text', ''),
+                        'timestamp': self.graph.nodes[node].get('timestamp', ''),
+                        'credibility_score': self.graph.nodes[node].get('credibility_score', 0.5)
+                    })
+                
+                # Explore neighbors
+                for neighbor in self.graph.neighbors(node):
+                    if neighbor not in visited and neighbor.startswith('claim_'):
+                        queue.append((neighbor, path + [node]))
+        
+        return chain
+
+    def get_entities_by_type(self, types: List[str]) -> List[Dict]:
+        """Get entities filtered by type"""
+        entities = []
+        for node, attrs in self.graph.nodes(data=True):
+            if attrs.get('type') in types:
+                relationships = self.get_entity_relationships(node)
+                entities.append({
+                    'id': node,
+                    'name': attrs.get('name', node),
+                    'type': attrs.get('type'),
+                    'relationships': relationships
+                })
+        return entities
+    
+    def search_entities(self, query: str) -> List[Dict]:
+        """Search entities by name or content"""
+        results = []
+        query = query.lower()
+        for node, attrs in self.graph.nodes(data=True):
+            name = attrs.get('name', '').lower()
+            text = attrs.get('text', '').lower()
+            if query in name or query in text:
+                results.append({
+                    'id': node,
+                    'name': attrs.get('name', node),
+                    'type': attrs.get('type'),
+                    'text': attrs.get('text', '')
+                })
+        return results

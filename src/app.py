@@ -28,6 +28,8 @@ from integration_layer import (
 )
 import requests
 from datetime import datetime
+from knowledge_graph import KnowledgeGraph
+import json
 
 # Load environment variables and download NLTK data
 load_dotenv()
@@ -53,6 +55,7 @@ class MisinformationDetector:
         self.fact_checker = FactChecker()
         self.source_checker = SourceChecker()
         self.alert_system = AlertSystem()
+        self.knowledge_graph = KnowledgeGraph()
         
         # Initialize integration layer
         self.integration_layer = IntegrationLayer()
@@ -137,68 +140,176 @@ class MisinformationDetector:
                      sentiment_factor)
         
         return min(risk_score, 1.0)
-
+    
+    def update_knowledge_graph(self, results: List[Dict]):
+        """Update knowledge graph with new results"""
+        for result in results:
+            try:
+                # Prepare content for knowledge graph
+                content = {
+                    'text': result['sentence'],
+                    'timestamp': result['timestamp'],
+                    'credibility_score': result['fact_check_results']['credibility_score'],
+                    'verified': False,
+                    'classification': {
+                        'labels': result['classifications'],
+                        'scores': result['classification_scores']
+                    },
+                    'sentiment': result['sentiment']['label'],
+                    'key_terms': result['key_terms'],
+                    'risk_score': result['risk_score']
+                }
+                
+                # Add sources if available
+                if result['urls'] and result['source_checks']:
+                    content['sources'] = [
+                        {
+                            'url': url,
+                            'check_result': check
+                        } for url, check in zip(result['urls'], result['source_checks'])
+                    ]
+                
+                # Add to knowledge graph
+                self.knowledge_graph.add_content(content)
+                
+            except Exception as e:
+                print(f"Error updating knowledge graph: {e}")
+            
     def analyze_text(self, text: str) -> List[Dict]:
+        """
+        Analyze text with integrated knowledge graph support
+        """
         sentences = self.preprocess_text(text)
         results = []
         
         for sentence in sentences:
-            classification = self.classifier(
-                sentence,
-                candidate_labels=[
-                    "factual statement", 
-                    "opinion", 
-                    "misleading information"
-                ]
-            )
-            
-            sentiment = self.sentiment_analyzer(sentence)[0]
-            fact_check_results = self.fact_checker.check_claim(sentence)
-            urls = self._extract_urls(sentence)
-            source_checks = [self.source_checker.check_source(url) for url in urls]
-            
-            risk_score = self.calculate_risk_score(
-                classification['scores'],
-                fact_check_results['credibility_score'],
-                sentiment
-            )
-            
-            key_terms = self.extract_key_terms(sentence)
-            
-            result = {
-                'sentence': sentence,
-                'classifications': classification['labels'],
-                'classification_scores': classification['scores'],
-                'sentiment': sentiment,
-                'fact_check_results': fact_check_results,
-                'source_checks': source_checks,
-                'urls': urls,
-                'risk_score': risk_score,
-                'key_terms': key_terms,
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            # Check for alerts
-            alerts = self.alert_system.check_content(result)
-            if alerts:
-                for alert in alerts:
-                    st.warning(f"⚠️ Alert: {alert.message}")
+            try:
+                # Existing classification
+                classification = self.classifier(
+                    sentence,
+                    candidate_labels=[
+                        "factual statement", 
+                        "opinion", 
+                        "misleading information"
+                    ]
+                )
+                
+                # Existing analysis components
+                sentiment = self.sentiment_analyzer(sentence)[0]
+                fact_check_results = self.fact_checker.check_claim(sentence)
+                urls = self._extract_urls(sentence)
+                source_checks = [self.source_checker.check_source(url) for url in urls]
+                
+                risk_score = self.calculate_risk_score(
+                    classification['scores'],
+                    fact_check_results['credibility_score'],
+                    sentiment
+                )
+                
+                key_terms = self.extract_key_terms(sentence)
+                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                
+                # Construct result dictionary
+                result = {
+                    'sentence': sentence,
+                    'classifications': classification['labels'],
+                    'classification_scores': classification['scores'],
+                    'sentiment': sentiment,
+                    'fact_check_results': fact_check_results,
+                    'source_checks': source_checks,
+                    'urls': urls,
+                    'risk_score': risk_score,
+                    'key_terms': key_terms,
+                    'timestamp': timestamp
+                }
+                
+                # Add to knowledge graph
+                try:
+                    knowledge_graph_content = {
+                        'text': sentence,
+                        'timestamp': timestamp,
+                        'credibility_score': fact_check_results['credibility_score'],
+                        'verified': False,
+                        'classification': classification,
+                        'sentiment': sentiment['label'],
+                        'key_terms': key_terms,
+                        'risk_score': risk_score
+                    }
                     
-                    # Try to send alert through integration
-                    try:
-                        alert_data = {
-                            'message': alert.message,
-                            'risk_score': alert.risk_score,
-                            'timestamp': alert.timestamp,
-                            'source_text': alert.source_text,
-                            'severity': alert.severity,
-                            'type': alert.type
-                        }
-                        self.integration_layer.send_alerts_sync(alert_data)
-                    except Exception as e:
-                        st.error(f"Failed to send alert: {str(e)}")
-            
-            results.append(result)
+                    # Add sources if available
+                    if urls and source_checks:
+                        knowledge_graph_content['sources'] = [
+                            {
+                                'url': url,
+                                'check_result': check
+                            } for url, check in zip(urls, source_checks)
+                        ]
+                    
+                    # Add to knowledge graph
+                    self.knowledge_graph.add_content(knowledge_graph_content)
+                    
+                    # Get context from knowledge graph
+                    graph_context = self.knowledge_graph.get_claim_context(
+                        f"claim_{timestamp.replace(' ', '_').replace(':', '')}"
+                    )
+                    
+                    # Add graph context to result
+                    result['knowledge_graph_context'] = {
+                        'related_claims': graph_context['related_claims'],
+                        'related_entities': graph_context['entities'],
+                        'sources': graph_context['sources']
+                    }
+                    
+                except Exception as e:
+                    print(f"Knowledge graph integration error: {e}")
+                    result['knowledge_graph_context'] = {
+                        'error': str(e),
+                        'related_claims': [],
+                        'related_entities': [],
+                        'sources': []
+                    }
+                
+                # Check for alerts
+                alerts = self.alert_system.check_content(result)
+                if alerts:
+                    for alert in alerts:
+                        st.warning(f"⚠️ Alert: {alert.message}")
+                        
+                        try:
+                            # Enhanced alert data with knowledge graph context
+                            alert_data = {
+                                'message': alert.message,
+                                'risk_score': alert.risk_score,
+                                'timestamp': alert.timestamp,
+                                'source_text': alert.source_text,
+                                'severity': alert.severity,
+                                'type': alert.type,
+                                'related_claims': result['knowledge_graph_context']['related_claims'],
+                                'related_entities': result['knowledge_graph_context']['related_entities']
+                            }
+                            self.integration_layer.send_alerts_sync(alert_data)
+                        except Exception as e:
+                            st.error(f"Failed to send alert: {str(e)}")
+                
+                results.append(result)
+                
+            except Exception as e:
+                print(f"Error analyzing sentence: {e}")
+                # Add error result
+                results.append({
+                    'sentence': sentence,
+                    'error': str(e),
+                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                })
+        
+        # After processing all sentences, analyze patterns
+        try:
+            if results:
+                patterns = self.knowledge_graph.analyze_claim_patterns()
+                # Add pattern analysis to the last result
+                results[-1]['pattern_analysis'] = patterns
+        except Exception as e:
+            print(f"Error analyzing patterns: {e}")
         
         return results
 
@@ -850,7 +961,201 @@ def alerts_tab():
     
     # Display the alerts dashboard
     st.session_state.detector.alert_system.display_alerts_dashboard()
+
+def knowledge_graph_tab():
+    st.title("🕸️ Knowledge Graph Analysis")
     
+    # Add sidebar controls for Export/Import
+    st.sidebar.markdown("### Knowledge Graph Controls")
+    
+    # Export/Import section
+    with st.sidebar.expander("Export/Import"):
+        col1, col2 = st.columns(2)
+        
+        # Export functionality
+        with col1:
+            if st.button("Export Graph"):
+                timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"knowledge_graph_{timestamp}.json"
+                try:
+                    st.session_state.detector.knowledge_graph.export_graph(filename)
+                    st.success(f"✅ Graph exported to {filename}")
+                    
+                    # Add download button for the exported file
+                    with open(filename, 'r') as f:
+                        st.download_button(
+                            label="Download Graph File",
+                            data=f.read(),
+                            file_name=filename,
+                            mime="application/json"
+                        )
+                except Exception as e:
+                    st.error(f"❌ Export failed: {str(e)}")
+        
+        # Import functionality
+        with col2:
+            uploaded_file = st.file_uploader("Import Graph", type="json")
+            if uploaded_file is not None:
+                try:
+                    # Create a temporary file to handle the upload
+                    with open("temp_graph.json", "wb") as f:
+                        f.write(uploaded_file.getbuffer())
+                    st.session_state.detector.knowledge_graph.import_graph("temp_graph.json")
+                    st.success("✅ Graph imported successfully!")
+                except Exception as e:
+                    st.error(f"❌ Import failed: {str(e)}")
+
+    # Main content area with tabs
+    tab1, tab2, tab3 = st.tabs(["Graph View", "Pattern Analysis", "Entity Explorer"])
+    
+    with tab1:
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            st.subheader("Graph Visualization")
+            st.session_state.detector.knowledge_graph.visualize()
+            
+            # Add refresh button with proper rerun command
+            if st.button("🔄 Refresh Visualization"):
+                st.rerun()  # Updated from experimental_rerun
+        
+        with col2:
+            st.subheader("Graph Statistics")
+            stats = st.session_state.detector.knowledge_graph.get_statistics()
+            
+            # Display metrics without keys
+            st.metric("🔵 Total Nodes", stats['total_nodes'])
+            st.metric("🔗 Total Relationships", stats['total_edges'])
+            
+            # Display node type distribution
+            if 'node_types' in stats:
+                st.write("**Node Type Distribution:**")
+                for node_type, count in stats['node_types'].items():
+                    st.write(f"- {node_type}: {count}")
+            
+    with tab2:
+        st.subheader("Pattern Analysis")
+        
+        # Add analysis options
+        analysis_type = st.radio(
+            "Select Analysis Type",
+            ["Entity Co-occurrence", "Temporal Patterns", "Narrative Chains"],
+            horizontal=True
+        )
+        
+        if st.button("Analyze Patterns"):  # Removed key parameter
+            with st.spinner("Analyzing patterns..."):
+                patterns = st.session_state.detector.knowledge_graph.analyze_claim_patterns()
+                
+                if analysis_type == "Entity Co-occurrence":
+                    st.write("**Entity Co-occurrence Analysis**")
+                    if patterns['common_entities']:
+                        # Sort entities by frequency
+                        sorted_entities = dict(sorted(
+                            patterns['common_entities'].items(),
+                            key=lambda x: x[1],
+                            reverse=True
+                        ))
+                        
+                        fig = px.bar(
+                            x=list(sorted_entities.keys())[:10],
+                            y=list(sorted_entities.values())[:10],
+                            title="Most Common Entities",
+                            labels={'x': 'Entity', 'y': 'Frequency'}
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("No entity co-occurrence data available.")
+                
+                elif analysis_type == "Temporal Patterns":
+                    st.write("**Temporal Distribution Analysis**")
+                    if patterns['temporal_patterns']:
+                        fig = px.line(
+                            x=list(patterns['temporal_patterns'].keys()),
+                            y=list(patterns['temporal_patterns'].values()),
+                            title="Content Distribution Over Time",
+                            labels={'x': 'Hour', 'y': 'Number of Claims'}
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("No temporal pattern data available.")
+                
+                else:  # Narrative Chains
+                    st.write("**Narrative Chain Analysis**")
+                    if patterns['narrative_chains']:
+                        for idx, chain in enumerate(patterns['narrative_chains']):
+                            with st.expander(f"Narrative Chain {idx+1} ({len(chain)} claims)"):
+                                for claim in chain:
+                                    col1, col2 = st.columns([3, 1])
+                                    with col1:
+                                        st.write(claim['text'])
+                                    with col2:
+                                        st.progress(claim['credibility_score'])
+                                        st.caption(f"Credibility: {claim['credibility_score']:.2%}")
+                    else:
+                        st.info("No narrative chains found.")
+    
+    with tab3:
+        st.subheader("Entity Explorer")
+        
+        # Add search functionality
+        search_query = st.text_input("🔍 Search Entities", "")
+        
+        # Entity type filter
+        entity_types = st.multiselect(
+            "Filter by Entity Type",
+            options=list(st.session_state.detector.knowledge_graph.entity_types),
+            default=["PERSON", "ORG"]
+        )
+        
+        # Display entities
+        if entity_types:
+            if search_query:
+                # Search within filtered entities
+                entities = st.session_state.detector.knowledge_graph.search_entities(search_query)
+                entities = [e for e in entities if e['type'] in entity_types]
+            else:
+                entities = st.session_state.detector.knowledge_graph.get_entities_by_type(entity_types)
+            
+            if entities:
+                for entity in entities:
+                    with st.expander(f"{entity['type']}: {entity['name']}"):
+                        # Display entity details
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.write("**Relationships:**")
+                            st.json(entity['relationships'])
+                        with col2:
+                            if 'mentions' in entity['relationships']:
+                                st.write("**Mention Count:**", len(entity['relationships']['mentions']))
+                            if 'sources' in entity['relationships']:
+                                st.write("**Source Count:**", len(entity['relationships']['sources']))
+            else:
+                st.info("No entities found matching the criteria.")
+        else:
+            st.warning("Please select at least one entity type.")
+        
+        # Add export selected entities option
+        if 'entities' in locals():  # Check if entities exists
+            if entities:  # Check if entities is not empty
+                if st.button("Export Selected Entities"):
+                    export_data = {
+                        "entities": entities,
+                        "export_time": datetime.now().isoformat(),
+                        "filters": {
+                            "types": entity_types,
+                            "search_query": search_query if search_query else "None"
+                        }
+                    }
+                    
+                    # Convert to JSON and offer download
+                    json_str = json.dumps(export_data, indent=2)
+                    st.download_button(
+                        label="Download Entities JSON",
+                        data=json_str,
+                        file_name=f"entities_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                        mime="application/json"
+                    )
+                          
 def main():
     st.set_page_config(page_title="Real-time Misinformation Detector", 
                        layout="wide")
@@ -877,6 +1182,7 @@ def main():
             "📡 Live Monitor",
             "📊 Dashboard",
             "🚨 Alerts",
+            "🕸️ Knowledge Graph",
             "🔌 Integrations"
         ]
     )
@@ -902,6 +1208,9 @@ def main():
     elif nav_selection == "🚨 Alerts":
         alerts_tab()
     
+    elif nav_selection == "🕸️ Knowledge Graph":
+        knowledge_graph_tab()
+        
     elif nav_selection == "🔌 Integrations":
         integration_settings_tab()
     
