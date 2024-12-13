@@ -24,7 +24,7 @@ Follow these steps to set up the project locally:
 
 1. **Clone the repository**:
     ```bash
-    git clone https://github.com/yourusername/truthtell.git
+    git clone https://github.com/XENO2410/truthtell.git
     cd truthtell
     ```
 
