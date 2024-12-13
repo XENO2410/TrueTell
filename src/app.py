@@ -35,18 +35,27 @@ download_nltk_data()
 
 class MisinformationDetector:
     def __init__(self):
+        # Initialize NLTK components with error handling
+        try:
+            self.punkt_tokenizer = nltk.data.load('tokenizers/punkt/english.pickle')
+            self.word_tokenizer = nltk.WordPunctTokenizer()
+            self.stop_words = set(stopwords.words('english'))
+        except LookupError as e:
+            print(f"Error loading NLTK resources: {e}")
+            # Fallback initialization
+            self.punkt_tokenizer = None
+            self.word_tokenizer = None
+            self.stop_words = set()
+            
         self.classifier = pipeline("zero-shot-classification", 
                                  model="facebook/bart-large-mnli")
         self.sentiment_analyzer = pipeline("sentiment-analysis")
-        self.stop_words = set(stopwords.words('english'))
         self.fact_checker = FactChecker()
         self.source_checker = SourceChecker()
         self.alert_system = AlertSystem()
         
         # Initialize integration layer
         self.integration_layer = IntegrationLayer()
-        
-        # Register integrations (you'll need to add your actual credentials)
         self.setup_integrations()
     
     def setup_integrations(self):
@@ -70,13 +79,28 @@ class MisinformationDetector:
             webhook_url=os.getenv("WEBHOOK_URL")
         )
         self.integration_layer.register_provider("webhook", webhook_integration)
-        
+    
     def preprocess_text(self, text: str) -> List[str]:
-        return sent_tokenize(text)
+        """Preprocess text into sentences"""
+        if not text:
+            return []
+        
+        try:
+            if self.punkt_tokenizer:
+                return self.punkt_tokenizer.tokenize(text)
+            else:
+                # Fallback to sent_tokenize
+                return sent_tokenize(text)
+        except Exception as e:
+            print(f"Error in sentence tokenization: {e}")
+            return [text]
     
     def extract_key_terms(self, text: str) -> List[str]:
+        """Extract key terms from text"""
         try:
-            tokens = word_tokenize(text)
+            # Use word tokenizer if available, otherwise fall back to word_tokenize
+            tokens = (self.word_tokenizer.tokenize(text) if self.word_tokenizer 
+                     else word_tokenize(text))
             
             basic_terms = [word for word in tokens 
                           if word.isalnum() 
@@ -84,7 +108,7 @@ class MisinformationDetector:
                           and len(word) > 2]
             
             try:
-                pos_tags = nltk.pos_tag(tokens)
+                pos_tags = nltk.pos_tag(basic_terms)
                 key_terms = [word for word, pos in pos_tags 
                             if (pos.startswith('NN') or pos.startswith('JJ')) 
                             and word.lower() not in self.stop_words
