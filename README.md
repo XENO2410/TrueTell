@@ -81,7 +81,6 @@ We welcome contributions to **TruthTell**! Follow these steps to contribute:
 4. Push to the branch (`git push origin feature-name`).
 5. Open a Pull Request.
 
-Please check the [contribution guidelines](CONTRIBUTING.md) for detailed instructions.
 
 ## 📜 License
 This project is licensed under the **[Your License Name]**. See the [LICENSE](LICENSE) file for more details.
