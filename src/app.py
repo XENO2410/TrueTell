@@ -974,21 +974,41 @@ def knowledge_graph_tab():
         
         # Export functionality
         with col1:
+            export_format = st.selectbox("Export Format", ["JSON", "PNG", "HTML"])
             if st.button("Export Graph"):
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"knowledge_graph_{timestamp}.json"
                 try:
-                    st.session_state.detector.knowledge_graph.export_graph(filename)
-                    st.success(f"✅ Graph exported to {filename}")
-                    
-                    # Add download button for the exported file
-                    with open(filename, 'r') as f:
-                        st.download_button(
-                            label="Download Graph File",
-                            data=f.read(),
-                            file_name=filename,
-                            mime="application/json"
-                        )
+                    if export_format == "JSON":
+                        filename = f"knowledge_graph_{timestamp}.json"
+                        st.session_state.detector.knowledge_graph.export_graph(filename)
+                        with open(filename, 'r') as f:
+                            st.download_button(
+                                label="Download JSON",
+                                data=f.read(),
+                                file_name=filename,
+                                mime="application/json"
+                            )
+                    elif export_format == "PNG":
+                        filename = f"knowledge_graph_{timestamp}.png"
+                        st.session_state.detector.knowledge_graph.export_as_image(filename)
+                        with open(filename, 'rb') as f:
+                            st.download_button(
+                                label="Download PNG",
+                                data=f.read(),
+                                file_name=filename,
+                                mime="image/png"
+                            )
+                    else:  # HTML
+                        filename = f"knowledge_graph_{timestamp}.html"
+                        st.session_state.detector.knowledge_graph.export_as_html(filename)
+                        with open(filename, 'r') as f:
+                            st.download_button(
+                                label="Download HTML",
+                                data=f.read(),
+                                file_name=filename,
+                                mime="text/html"
+                            )
+                    st.success(f"✅ Graph exported as {export_format}")
                 except Exception as e:
                     st.error(f"❌ Export failed: {str(e)}")
         
@@ -997,7 +1017,6 @@ def knowledge_graph_tab():
             uploaded_file = st.file_uploader("Import Graph", type="json")
             if uploaded_file is not None:
                 try:
-                    # Create a temporary file to handle the upload
                     with open("temp_graph.json", "wb") as f:
                         f.write(uploaded_file.getbuffer())
                     st.session_state.detector.knowledge_graph.import_graph("temp_graph.json")
@@ -1012,44 +1031,107 @@ def knowledge_graph_tab():
         col1, col2 = st.columns([3, 1])
         with col1:
             st.subheader("Graph Visualization")
-            st.session_state.detector.knowledge_graph.visualize()
             
-            # Add refresh button with proper rerun command
+            # Add visualization controls
+            with st.expander("Visualization Settings"):
+                col_a, col_b = st.columns(2)
+                with col_a:
+                    min_weight = st.slider("Minimum Relationship Weight", 0.0, 1.0, 0.1)
+                    show_labels = st.checkbox("Show Node Labels", value=True)
+                with col_b:
+                    layout_type = st.selectbox("Layout Type", ["spring", "circular", "random"])
+                    node_size = st.slider("Node Size", 10, 50, 20)
+            
+            # Add search and highlight
+            search_term = st.text_input("🔍 Search and Highlight Nodes", "")
+            highlighted_nodes = []
+            if search_term:
+                highlighted_nodes = st.session_state.detector.knowledge_graph.search_nodes(search_term)
+            
+            # Visualize graph with settings
+            st.session_state.detector.knowledge_graph.visualize(
+                min_weight=min_weight,
+                show_labels=show_labels,
+                layout=layout_type,
+                node_size=node_size,
+                highlight_nodes=highlighted_nodes
+            )
+            
+            # Add refresh button
             if st.button("🔄 Refresh Visualization"):
-                st.rerun()  # Updated from experimental_rerun
+                st.rerun()
         
         with col2:
             st.subheader("Graph Statistics")
             stats = st.session_state.detector.knowledge_graph.get_statistics()
             
-            # Display metrics without keys
-            st.metric("🔵 Total Nodes", stats['total_nodes'])
-            st.metric("🔗 Total Relationships", stats['total_edges'])
+            # Display metrics with enhanced styling
+            col_stats1, col_stats2 = st.columns(2)
+            with col_stats1:
+                st.metric("🔵 Nodes", stats['total_nodes'])
+                st.metric("🔗 Edges", stats['total_edges'])
+            with col_stats2:
+                st.metric("📊 Density", round(stats.get('graph_density', 0), 3))
+                st.metric("🔄 Clusters", stats.get('num_clusters', 0))
             
-            # Display node type distribution
+            # Display node type distribution with progress bars
             if 'node_types' in stats:
-                st.write("**Node Type Distribution:**")
+                st.write("**Node Distribution:**")
+                max_count = max(stats['node_types'].values())
                 for node_type, count in stats['node_types'].items():
-                    st.write(f"- {node_type}: {count}")
+                    st.write(f"{node_type}")
+                    st.progress(count / max_count)
+                    st.caption(f"Count: {count}")
             
+            # Add graph metrics
+            with st.expander("Advanced Metrics"):
+                st.write(f"**Avg. Degree:** {stats.get('avg_degree', 0):.2f}")
+                st.write(f"**Diameter:** {stats.get('diameter', 0)}")
+                st.write(f"**Avg. Path Length:** {stats.get('avg_path_length', 0):.2f}")
+    
     with tab2:
         st.subheader("Pattern Analysis")
         
-        # Add analysis options
+        # Add analysis options with enhanced UI
         analysis_type = st.radio(
             "Select Analysis Type",
             ["Entity Co-occurrence", "Temporal Patterns", "Narrative Chains"],
             horizontal=True
         )
         
-        if st.button("Analyze Patterns"):  # Removed key parameter
+        # Add analysis parameters
+        with st.expander("Analysis Parameters"):
+            if analysis_type == "Entity Co-occurrence":
+                min_occurrence = st.slider("Minimum Occurrence", 1, 10, 2)
+                entity_types = st.multiselect(
+                    "Entity Types to Analyze",
+                    options=list(st.session_state.detector.knowledge_graph.entity_types),
+                    default=["PERSON", "ORG"]
+                )
+            elif analysis_type == "Temporal Patterns":
+                time_window = st.selectbox("Time Window", ["Hour", "Day", "Week", "Month"])
+                include_weekends = st.checkbox("Include Weekends", value=True)
+            else:  # Narrative Chains
+                chain_length = st.slider("Minimum Chain Length", 2, 10, 3)
+                similarity_threshold = st.slider("Similarity Threshold", 0.0, 1.0, 0.7)
+        
+        if st.button("Analyze Patterns"):
             with st.spinner("Analyzing patterns..."):
-                patterns = st.session_state.detector.knowledge_graph.analyze_claim_patterns()
+                # Get patterns with parameters
+                patterns = st.session_state.detector.knowledge_graph.analyze_claim_patterns(
+                    analysis_type=analysis_type,
+                    min_occurrence=min_occurrence if analysis_type == "Entity Co-occurrence" else None,
+                    entity_types=entity_types if analysis_type == "Entity Co-occurrence" else None,
+                    time_window=time_window if analysis_type == "Temporal Patterns" else None,
+                    include_weekends=include_weekends if analysis_type == "Temporal Patterns" else None,
+                    chain_length=chain_length if analysis_type == "Narrative Chains" else None,
+                    similarity_threshold=similarity_threshold if analysis_type == "Narrative Chains" else None
+                )
                 
+                # Display results based on analysis type
                 if analysis_type == "Entity Co-occurrence":
                     st.write("**Entity Co-occurrence Analysis**")
                     if patterns['common_entities']:
-                        # Sort entities by frequency
                         sorted_entities = dict(sorted(
                             patterns['common_entities'].items(),
                             key=lambda x: x[1],
@@ -1060,22 +1142,91 @@ def knowledge_graph_tab():
                             x=list(sorted_entities.keys())[:10],
                             y=list(sorted_entities.values())[:10],
                             title="Most Common Entities",
-                            labels={'x': 'Entity', 'y': 'Frequency'}
+                            labels={'x': 'Entity', 'y': 'Frequency'},
+                            template="plotly_dark"  # Dark theme
                         )
                         st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Add network graph of co-occurrences
+                        if 'co_occurrence_network' in patterns:
+                            st.write("**Entity Co-occurrence Network**")
+                            st.session_state.detector.knowledge_graph.visualize_network(
+                                patterns['co_occurrence_network']
+                            )
                     else:
                         st.info("No entity co-occurrence data available.")
                 
                 elif analysis_type == "Temporal Patterns":
                     st.write("**Temporal Distribution Analysis**")
                     if patterns['temporal_patterns']:
+                        # Convert temporal patterns to DataFrame for better plotting
+                        temporal_df = pd.DataFrame([
+                            {'timestamp': k, 'count': v}
+                            for k, v in patterns['temporal_patterns'].items()
+                        ])
+                        temporal_df['timestamp'] = pd.to_datetime(temporal_df['timestamp'])
+                        temporal_df = temporal_df.sort_values('timestamp')
+                
+                        # Timeline visualization
                         fig = px.line(
-                            x=list(patterns['temporal_patterns'].keys()),
-                            y=list(patterns['temporal_patterns'].values()),
-                            title="Content Distribution Over Time",
-                            labels={'x': 'Hour', 'y': 'Number of Claims'}
+                            temporal_df,
+                            x='timestamp',
+                            y='count',
+                            title=f"Content Distribution Over {time_window}s",
+                            labels={'timestamp': time_window, 'count': 'Number of Claims'},
+                            template="plotly_dark"
                         )
+                        fig.update_traces(line_color='#00ff00')  # Make line more visible
                         st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Heatmap visualization
+                        if 'temporal_heatmap' in patterns and patterns['temporal_heatmap'] is not None:
+                            st.write("**Activity Heatmap**")
+                            
+                            # Convert the list back to numpy array
+                            heatmap_data = np.array(patterns['temporal_heatmap'])
+                            
+                            # Create heatmap with custom colorscale
+                            fig_heatmap = px.imshow(
+                                heatmap_data,
+                                labels=dict(x="Hour of Day", y="Day of Week"),
+                                x=patterns['temporal_metadata']['hours'],
+                                y=patterns['temporal_metadata']['days'],
+                                title="Activity Distribution (Claims per Hour)",
+                                color_continuous_scale=[
+                                    [0, 'rgb(68, 1, 84)'],       # Dark purple for low values
+                                    [0.25, 'rgb(59, 82, 139)'],  # Blue-purple
+                                    [0.5, 'rgb(33, 145, 140)'],  # Teal
+                                    [0.75, 'rgb(94, 201, 98)'],  # Light green
+                                    [1, 'rgb(253, 231, 37)']     # Yellow for high values
+                                ],
+                                aspect="auto"
+                            )
+                            
+                            # Update layout for better visibility
+                            fig_heatmap.update_layout(
+                                xaxis_title="Hour of Day",
+                                yaxis_title="Day of Week",
+                                coloraxis_colorbar_title="Activity Level",
+                                plot_bgcolor='rgb(17, 17, 17)',
+                                paper_bgcolor='rgb(17, 17, 17)',
+                                font=dict(color='white')
+                            )
+                            
+                            st.plotly_chart(fig_heatmap, use_container_width=True)
+                            
+                            # Add summary statistics
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.metric(
+                                    "Peak Activity", 
+                                    f"{patterns['temporal_metadata']['max_value']:.0f} claims/hour"
+                                )
+                            with col2:
+                                st.metric(
+                                    "Average Activity",
+                                    f"{np.mean(heatmap_data):.1f} claims/hour"
+                                )
                     else:
                         st.info("No temporal pattern data available.")
                 
@@ -1091,59 +1242,107 @@ def knowledge_graph_tab():
                                     with col2:
                                         st.progress(claim['credibility_score'])
                                         st.caption(f"Credibility: {claim['credibility_score']:.2%}")
+                                        
+                                # Add chain visualization
+                                if 'chain_graph' in claim:
+                                    st.write("**Chain Visualization**")
+                                    st.session_state.detector.knowledge_graph.visualize_chain(
+                                        claim['chain_graph']
+                                    )
                     else:
                         st.info("No narrative chains found.")
     
     with tab3:
         st.subheader("Entity Explorer")
         
-        # Add search functionality
-        search_query = st.text_input("🔍 Search Entities", "")
+        # Enhanced search functionality
+        col_search1, col_search2 = st.columns([2, 1])
+        with col_search1:
+            search_query = st.text_input("🔍 Search Entities", "")
+        with col_search2:
+            search_type = st.selectbox("Search Type", ["Contains", "Exact Match", "Regex"])
         
-        # Entity type filter
+        # Enhanced entity type filter
         entity_types = st.multiselect(
             "Filter by Entity Type",
             options=list(st.session_state.detector.knowledge_graph.entity_types),
             default=["PERSON", "ORG"]
         )
         
-        # Display entities
+        # Add relationship type filter
+        relationship_types = st.multiselect(
+            "Filter by Relationship Type",
+            options=list(st.session_state.detector.knowledge_graph.relationship_types),
+            default=[]
+        )
+        
+        # Display entities with enhanced UI
         if entity_types:
-            if search_query:
-                # Search within filtered entities
-                entities = st.session_state.detector.knowledge_graph.search_entities(search_query)
-                entities = [e for e in entities if e['type'] in entity_types]
-            else:
-                entities = st.session_state.detector.knowledge_graph.get_entities_by_type(entity_types)
+            entities = st.session_state.detector.knowledge_graph.search_entities(
+                query=search_query,
+                search_type=search_type,
+                entity_types=entity_types,
+                relationship_types=relationship_types
+            )
             
             if entities:
+                # Add sorting options
+                sort_by = st.selectbox(
+                    "Sort By",
+                    ["Name", "Type", "Relationship Count", "Mention Count"]
+                )
+                
+                # Sort entities based on selection
+                entities = st.session_state.detector.knowledge_graph.sort_entities(
+                    entities,
+                    sort_by=sort_by
+                )
+                
+                # Display entities with enhanced UI
                 for entity in entities:
                     with st.expander(f"{entity['type']}: {entity['name']}"):
-                        # Display entity details
                         col1, col2 = st.columns(2)
                         with col1:
                             st.write("**Relationships:**")
                             st.json(entity['relationships'])
+                            
+                            # Add relationship visualization
+                            if st.button(f"Visualize Relationships for {entity['name']}"):
+                                st.session_state.detector.knowledge_graph.visualize_entity_relationships(
+                                    entity['name']
+                                )
+                        
                         with col2:
+                            # Enhanced metrics
+                            st.write("**Entity Metrics:**")
                             if 'mentions' in entity['relationships']:
-                                st.write("**Mention Count:**", len(entity['relationships']['mentions']))
+                                st.metric(
+                                    "Mentions",
+                                    len(entity['relationships']['mentions']),
+                                    delta=entity.get('mention_trend', 0)
+                                )
                             if 'sources' in entity['relationships']:
-                                st.write("**Source Count:**", len(entity['relationships']['sources']))
-            else:
-                st.info("No entities found matching the criteria.")
-        else:
-            st.warning("Please select at least one entity type.")
-        
-        # Add export selected entities option
-        if 'entities' in locals():  # Check if entities exists
-            if entities:  # Check if entities is not empty
+                                st.metric(
+                                    "Sources",
+                                    len(entity['relationships']['sources']),
+                                    delta=entity.get('source_trend', 0)
+                                )
+                            
+                            # Add temporal distribution
+                            if 'temporal_distribution' in entity:
+                                st.write("**Temporal Distribution:**")
+                                st.line_chart(entity['temporal_distribution'])
+                
+                # Add export selected entities option
                 if st.button("Export Selected Entities"):
                     export_data = {
                         "entities": entities,
                         "export_time": datetime.now().isoformat(),
                         "filters": {
                             "types": entity_types,
-                            "search_query": search_query if search_query else "None"
+                            "search_query": search_query if search_query else "None",
+                            "search_type": search_type,
+                            "relationship_types": relationship_types
                         }
                     }
                     
@@ -1155,6 +1354,10 @@ def knowledge_graph_tab():
                         file_name=f"entities_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
                         mime="application/json"
                     )
+            else:
+                st.info("No entities found matching the criteria.")
+        else:
+            st.warning("Please select at least one entity type.")
                           
 def main():
     st.set_page_config(page_title="Real-time Misinformation Detector", 
