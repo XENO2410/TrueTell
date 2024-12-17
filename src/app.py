@@ -1611,8 +1611,8 @@ def main():
     
     # Sidebar Header with Logo
     st.sidebar.markdown("""
-        <div style="text-align: center;">
-            <h1 style="color: #ff4b4b;">Misinformation Detection System</h1>
+        <div style="text-align: center; padding: 20px 0;">
+            <h1 style="color: #ff4b4b;">TruthTell</h1>
         </div>
     """, unsafe_allow_html=True)
 
