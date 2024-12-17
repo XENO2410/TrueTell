@@ -30,6 +30,7 @@ import requests
 from datetime import datetime
 from knowledge_graph import KnowledgeGraph
 import json
+import networkx as nx
 
 # Load environment variables and download NLTK data
 load_dotenv()
@@ -962,6 +963,106 @@ def alerts_tab():
     # Display the alerts dashboard
     st.session_state.detector.alert_system.display_alerts_dashboard()
 
+def handle_export_import():
+    """Handle export and import functionality"""
+    col1, col2 = st.columns(2)
+    
+    # Export functionality
+    with col1:
+        export_format = st.selectbox("Export Format", ["JSON", "PNG", "HTML"])
+        if st.button("Export Graph"):
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            try:
+                filename = f"knowledge_graph_{timestamp}.{export_format.lower()}"
+                if export_format == "JSON":
+                    st.session_state.detector.knowledge_graph.export_graph(filename)
+                    mime_type = "application/json"
+                    mode = 'r'
+                elif export_format == "PNG":
+                    st.session_state.detector.knowledge_graph.export_as_image(filename)
+                    mime_type = "image/png"
+                    mode = 'rb'
+                else:  # HTML
+                    st.session_state.detector.knowledge_graph.export_as_html(filename)
+                    mime_type = "text/html"
+                    mode = 'r'
+                
+                with open(filename, mode) as f:
+                    st.download_button(
+                        label=f"Download {export_format}",
+                        data=f.read(),
+                        file_name=filename,
+                        mime=mime_type
+                    )
+                st.success(f"✅ Graph exported as {export_format}")
+            except Exception as e:
+                st.error(f"❌ Export failed: {str(e)}")
+    
+    # Import functionality
+    with col2:
+        uploaded_file = st.file_uploader("Import Graph", type="json")
+        if uploaded_file is not None:
+            try:
+                with open("temp_graph.json", "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                st.session_state.detector.knowledge_graph.import_graph("temp_graph.json")
+                st.success("✅ Graph imported successfully!")
+            except Exception as e:
+                st.error(f"❌ Import failed: {str(e)}")
+
+def handle_visualization_settings():
+    """Handle visualization settings"""
+    with st.expander("Visualization Settings"):
+        col_a, col_b = st.columns(2)
+        with col_a:
+            min_weight = st.slider("Minimum Relationship Weight", 0.0, 1.0, 0.1)
+            show_labels = st.checkbox("Show Node Labels", value=True)
+        with col_b:
+            layout_type = st.selectbox("Layout Type", ["spring", "circular", "random"])
+            node_size = st.slider("Node Size", 10, 50, 20)
+    return min_weight, show_labels, layout_type, node_size
+
+def display_graph_statistics(stats):
+    """Display graph statistics"""
+    col_stats1, col_stats2 = st.columns(2)
+    with col_stats1:
+        st.metric("🔵 Nodes", stats['total_nodes'])
+        st.metric("🔗 Edges", stats['total_edges'])
+    with col_stats2:
+        st.metric("📊 Density", round(stats.get('graph_density', 0), 3))
+        st.metric("🔄 Clusters", stats.get('num_clusters', 0))
+    
+    if 'node_types' in stats:
+        st.write("**Node Distribution:**")
+        max_count = max(stats['node_types'].values())
+        for node_type, count in stats['node_types'].items():
+            st.write(f"{node_type}")
+            st.progress(count / max_count)
+            st.caption(f"Count: {count}")
+    
+    with st.expander("Advanced Metrics"):
+        st.write(f"**Avg. Degree:** {stats.get('avg_degree', 0):.2f}")
+        st.write(f"**Diameter:** {stats.get('diameter', 0)}")
+        st.write(f"**Avg. Path Length:** {stats.get('avg_path_length', 0):.2f}")
+
+def handle_pattern_analysis(analysis_type):
+    """Handle pattern analysis based on type"""
+    params = {}
+    if analysis_type == "Entity Co-occurrence":
+        params['min_occurrence'] = st.slider("Minimum Occurrence", 1, 10, 2)
+        params['entity_types'] = st.multiselect(
+            "Entity Types to Analyze",
+            options=list(st.session_state.detector.knowledge_graph.entity_types),
+            default=["PERSON", "ORG"]
+        )
+    elif analysis_type == "Temporal Patterns":
+        params['time_window'] = st.selectbox("Time Window", ["Hour", "Day", "Week", "Month"])
+        params['include_weekends'] = st.checkbox("Include Weekends", value=True)
+    else:  # Narrative Chains
+        params['chain_length'] = st.slider("Minimum Chain Length", 2, 10, 3)
+        params['similarity_threshold'] = st.slider("Similarity Threshold", 0.0, 1.0, 0.7)
+    return params
+
 def knowledge_graph_tab():
     st.title("🕸️ Knowledge Graph Analysis")
     
@@ -1100,157 +1201,245 @@ def knowledge_graph_tab():
         )
         
         # Add analysis parameters
+        params = {}  # Initialize params dictionary
         with st.expander("Analysis Parameters"):
             if analysis_type == "Entity Co-occurrence":
-                min_occurrence = st.slider("Minimum Occurrence", 1, 10, 2)
-                entity_types = st.multiselect(
+                params['min_occurrence'] = st.slider("Minimum Occurrence", 1, 10, 2)
+                params['entity_types'] = st.multiselect(
                     "Entity Types to Analyze",
                     options=list(st.session_state.detector.knowledge_graph.entity_types),
                     default=["PERSON", "ORG"]
                 )
             elif analysis_type == "Temporal Patterns":
-                time_window = st.selectbox("Time Window", ["Hour", "Day", "Week", "Month"])
-                include_weekends = st.checkbox("Include Weekends", value=True)
+                params['time_window'] = st.selectbox("Time Window", ["Hour", "Day", "Week", "Month"])
+                params['include_weekends'] = st.checkbox("Include Weekends", value=True)
             else:  # Narrative Chains
-                chain_length = st.slider("Minimum Chain Length", 2, 10, 3)
-                similarity_threshold = st.slider("Similarity Threshold", 0.0, 1.0, 0.7)
+                params['chain_length'] = st.slider("Minimum Chain Length", 2, 10, 2)
+                params['similarity_threshold'] = st.slider("Similarity Threshold", 0.0, 1.0, 0.3)
         
         if st.button("Analyze Patterns"):
             with st.spinner("Analyzing patterns..."):
-                # Get patterns with parameters
-                patterns = st.session_state.detector.knowledge_graph.analyze_claim_patterns(
-                    analysis_type=analysis_type,
-                    min_occurrence=min_occurrence if analysis_type == "Entity Co-occurrence" else None,
-                    entity_types=entity_types if analysis_type == "Entity Co-occurrence" else None,
-                    time_window=time_window if analysis_type == "Temporal Patterns" else None,
-                    include_weekends=include_weekends if analysis_type == "Temporal Patterns" else None,
-                    chain_length=chain_length if analysis_type == "Narrative Chains" else None,
-                    similarity_threshold=similarity_threshold if analysis_type == "Narrative Chains" else None
-                )
-                
-                # Display results based on analysis type
-                if analysis_type == "Entity Co-occurrence":
-                    st.write("**Entity Co-occurrence Analysis**")
-                    if patterns['common_entities']:
-                        sorted_entities = dict(sorted(
-                            patterns['common_entities'].items(),
-                            key=lambda x: x[1],
-                            reverse=True
-                        ))
-                        
-                        fig = px.bar(
-                            x=list(sorted_entities.keys())[:10],
-                            y=list(sorted_entities.values())[:10],
-                            title="Most Common Entities",
-                            labels={'x': 'Entity', 'y': 'Frequency'},
-                            template="plotly_dark"  # Dark theme
-                        )
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Add network graph of co-occurrences
-                        if 'co_occurrence_network' in patterns:
-                            st.write("**Entity Co-occurrence Network**")
-                            st.session_state.detector.knowledge_graph.visualize_network(
-                                patterns['co_occurrence_network']
+                try:
+                    # Get patterns with parameters
+                    patterns = st.session_state.detector.knowledge_graph.analyze_claim_patterns(
+                        analysis_type=analysis_type,
+                        **params
+                    )
+                    
+                    if patterns is None:
+                        st.error("Error: Pattern analysis returned no results")
+                        return
+                    
+                    # Display metadata first
+                    if patterns.get('metadata'):  # Changed from analysis_metadata
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("Total Claims", patterns['metadata']['total_claims'])
+                        with col2:
+                            st.metric("Average Credibility", f"{patterns['metadata']['avg_credibility']:.2%}")
+                        with col3:
+                            st.metric("Risk Level", patterns['metadata']['risk_level'])
+                    
+                    # Display results based on analysis type
+                    if analysis_type == "Entity Co-occurrence":
+                        st.write("**Entity Co-occurrence Analysis**")
+                        if patterns.get('common_entities'):
+                            sorted_entities = dict(sorted(
+                                patterns['common_entities'].items(),
+                                key=lambda x: x[1],
+                                reverse=True
+                            ))
+                            
+                            # Create bar chart for common entities
+                            fig = px.bar(
+                                x=list(sorted_entities.keys())[:10],
+                                y=list(sorted_entities.values())[:10],
+                                title="Most Common Entities",
+                                labels={'x': 'Entity', 'y': 'Frequency'},
+                                template="plotly_dark"
                             )
-                    else:
-                        st.info("No entity co-occurrence data available.")
-                
-                elif analysis_type == "Temporal Patterns":
-                    st.write("**Temporal Distribution Analysis**")
-                    if patterns['temporal_patterns']:
-                        # Convert temporal patterns to DataFrame for better plotting
-                        temporal_df = pd.DataFrame([
-                            {'timestamp': k, 'count': v}
-                            for k, v in patterns['temporal_patterns'].items()
-                        ])
-                        temporal_df['timestamp'] = pd.to_datetime(temporal_df['timestamp'])
-                        temporal_df = temporal_df.sort_values('timestamp')
-                
-                        # Timeline visualization
-                        fig = px.line(
-                            temporal_df,
-                            x='timestamp',
-                            y='count',
-                            title=f"Content Distribution Over {time_window}s",
-                            labels={'timestamp': time_window, 'count': 'Number of Claims'},
-                            template="plotly_dark"
-                        )
-                        fig.update_traces(line_color='#00ff00')  # Make line more visible
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        # Heatmap visualization
-                        if 'temporal_heatmap' in patterns and patterns['temporal_heatmap'] is not None:
-                            st.write("**Activity Heatmap**")
+                            st.plotly_chart(fig, use_container_width=True)
                             
-                            # Convert the list back to numpy array
-                            heatmap_data = np.array(patterns['temporal_heatmap'])
-                            
-                            # Create heatmap with custom colorscale
-                            fig_heatmap = px.imshow(
-                                heatmap_data,
-                                labels=dict(x="Hour of Day", y="Day of Week"),
-                                x=patterns['temporal_metadata']['hours'],
-                                y=patterns['temporal_metadata']['days'],
-                                title="Activity Distribution (Claims per Hour)",
-                                color_continuous_scale=[
-                                    [0, 'rgb(68, 1, 84)'],       # Dark purple for low values
-                                    [0.25, 'rgb(59, 82, 139)'],  # Blue-purple
-                                    [0.5, 'rgb(33, 145, 140)'],  # Teal
-                                    [0.75, 'rgb(94, 201, 98)'],  # Light green
-                                    [1, 'rgb(253, 231, 37)']     # Yellow for high values
-                                ],
-                                aspect="auto"
-                            )
-                            
-                            # Update layout for better visibility
-                            fig_heatmap.update_layout(
-                                xaxis_title="Hour of Day",
-                                yaxis_title="Day of Week",
-                                coloraxis_colorbar_title="Activity Level",
-                                plot_bgcolor='rgb(17, 17, 17)',
-                                paper_bgcolor='rgb(17, 17, 17)',
-                                font=dict(color='white')
-                            )
-                            
-                            st.plotly_chart(fig_heatmap, use_container_width=True)
-                            
-                            # Add summary statistics
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.metric(
-                                    "Peak Activity", 
-                                    f"{patterns['temporal_metadata']['max_value']:.0f} claims/hour"
+                            # Display co-occurrence network
+                            if patterns.get('co_occurrence_network'):
+                                st.write("**Entity Co-occurrence Network**")
+                                st.session_state.detector.knowledge_graph.visualize_network(
+                                    patterns['co_occurrence_network']
                                 )
-                            with col2:
-                                st.metric(
-                                    "Average Activity",
-                                    f"{np.mean(heatmap_data):.1f} claims/hour"
+                                
+                                # Add network statistics
+                                network = patterns['co_occurrence_network']
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Total Connections", network.number_of_edges())
+                                with col2:
+                                    st.metric("Unique Entities", network.number_of_nodes())
+                                with col3:
+                                    density = nx.density(network)
+                                    st.metric("Network Density", f"{density:.3f}")
+                        else:
+                            st.info("No entity co-occurrence data available.")
+                    
+                    elif analysis_type == "Temporal Patterns":
+                        st.write("**Temporal Distribution Analysis**")
+                        if patterns.get('temporal_patterns'):
+                            # Display time range with error handling
+                            try:
+                                start_time = patterns['temporal_metadata'].get('start_time', 'N/A')
+                                end_time = patterns['temporal_metadata'].get('end_time', 'N/A')
+                                st.info(f"Analysis Period: {start_time} to {end_time}")
+                            except Exception as e:
+                                st.warning("Time range information not available")
+                            
+                            # Convert temporal patterns to DataFrame
+                            temporal_data = []
+                            for timestamp_str, count in patterns['temporal_patterns'].items():
+                                try:
+                                    timestamp = datetime.strptime(timestamp_str, '%Y-%m-%d %H:%M:%S')
+                                    temporal_data.append({'timestamp': timestamp, 'count': count})
+                                except Exception as e:
+                                    st.warning(f"Error parsing timestamp {timestamp_str}: {e}")
+                                    continue
+                            
+                            if temporal_data:
+                                temporal_df = pd.DataFrame(temporal_data)
+                                temporal_df = temporal_df.sort_values('timestamp')
+                                
+                                # Timeline visualization
+                                fig = px.line(
+                                    temporal_df,
+                                    x='timestamp',
+                                    y='count',
+                                    title=f"Content Distribution Over {params.get('time_window', 'Time')}",
+                                    labels={'timestamp': 'Time', 'count': 'Number of Claims'},
+                                    template="plotly_dark"
                                 )
-                    else:
-                        st.info("No temporal pattern data available.")
-                
-                else:  # Narrative Chains
-                    st.write("**Narrative Chain Analysis**")
-                    if patterns['narrative_chains']:
-                        for idx, chain in enumerate(patterns['narrative_chains']):
-                            with st.expander(f"Narrative Chain {idx+1} ({len(chain)} claims)"):
-                                for claim in chain:
-                                    col1, col2 = st.columns([3, 1])
-                                    with col1:
-                                        st.write(claim['text'])
-                                    with col2:
-                                        st.progress(claim['credibility_score'])
-                                        st.caption(f"Credibility: {claim['credibility_score']:.2%}")
-                                        
-                                # Add chain visualization
-                                if 'chain_graph' in claim:
+                                
+                                # Enhance the visualization
+                                fig.update_traces(
+                                    line_color='#00ff00',
+                                    mode='lines+markers',  # Add markers
+                                    marker=dict(
+                                        size=10,
+                                        symbol='circle'
+                                    )
+                                )
+                                
+                                # Customize x-axis
+                                fig.update_xaxes(
+                                    dtick="H1",  # Show every hour
+                                    tickformat="%H:%M",  # Show hour:minute format
+                                    gridcolor='rgba(128, 128, 128, 0.2)',  # Lighter grid
+                                    title_text="Time"
+                                )
+                                
+                                # Customize y-axis
+                                fig.update_yaxes(
+                                    gridcolor='rgba(128, 128, 128, 0.2)',
+                                    title_text="Number of Claims"
+                                )
+                                
+                                # Update layout
+                                fig.update_layout(
+                                    plot_bgcolor='rgba(0,0,0,0)',
+                                    paper_bgcolor='rgba(0,0,0,0)',
+                                    font=dict(color='white'),
+                                    showlegend=False,
+                                    hovermode='x unified'
+                                )
+                                
+                                st.plotly_chart(fig, use_container_width=True)
+                                
+                                # Display metrics
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Total Events", patterns['temporal_metadata']['total_entries'])
+                                with col2:
+                                    st.metric("Peak Count", patterns['temporal_metadata']['max_value'])
+                                with col3:
+                                    st.metric("Average Count", f"{patterns['temporal_metadata']['average_per_slot']:.1f}")
+                                
+                                # Display heatmap
+                                if patterns.get('temporal_heatmap'):
+                                    st.write("**Activity Heatmap**")
+                                    heatmap_data = np.array(patterns['temporal_heatmap'])
+                                    
+                                    # Get days and hours from metadata
+                                    days = patterns['temporal_metadata'].get('days', ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'])
+                                    hours = patterns['temporal_metadata'].get('hours', [f"{h:02d}:00" for h in range(24)])
+                                    
+                                    fig_heatmap = px.imshow(
+                                        heatmap_data,
+                                        labels=dict(x="Hour of Day", y="Day of Week"),
+                                        x=hours,
+                                        y=days,
+                                        title="Activity Distribution (Claims per Hour)",
+                                        color_continuous_scale="Viridis"
+                                    )
+                                    st.plotly_chart(fig_heatmap, use_container_width=True)
+                                    
+                                    # Display distribution statistics
+                                    if 'distribution' in patterns['temporal_metadata']:
+                                        with st.expander("Distribution Statistics"):
+                                            st.json(patterns['temporal_metadata']['distribution'])
+                            else:
+                                st.warning("No valid temporal data to display")
+                        else:
+                            st.info("No temporal pattern data available.")
+                    
+                    elif analysis_type == "Narrative Chains":
+                        st.write("**Narrative Chain Analysis**")
+                        if patterns.get('narrative_chains'):
+                            for idx, chain in enumerate(patterns['narrative_chains']):
+                                st.subheader(f"Narrative Chain {idx+1} ({chain['length']} claims)")
+                                
+                                # Display chain metrics in columns instead of expander
+                                col1, col2, col3 = st.columns(3)
+                                with col1:
+                                    st.metric("Chain Length", chain['length'])
+                                with col2:
+                                    st.metric("Average Credibility", f"{chain['avg_credibility']:.2%}")
+                                with col3:
+                                    st.metric("Claims", len(chain['claims']))
+                                
+                                # Display claims in a regular container
+                                st.write("**Claims in Chain:**")
+                                for claim in chain['claims']:
+                                    container = st.container()
+                                    with container:
+                                        col1, col2 = st.columns([3, 1])
+                                        with col1:
+                                            st.write(claim['text'])
+                                        with col2:
+                                            st.progress(claim['credibility_score'])
+                                            st.caption(f"Credibility: {claim['credibility_score']:.2%}")
+                                
+                                # Visualize chain
+                                if chain.get('chain_graph'):
                                     st.write("**Chain Visualization**")
                                     st.session_state.detector.knowledge_graph.visualize_chain(
-                                        claim['chain_graph']
+                                        chain['chain_graph']
                                     )
-                    else:
-                        st.info("No narrative chains found.")
+                                
+                                # Display statistics in a regular container
+                                st.write("**Chain Statistics**")
+                                stats_df = pd.DataFrame([{
+                                    'Claim ID': c['claim_id'],
+                                    'Timestamp': c['timestamp'],
+                                    'Credibility': c['credibility_score'],
+                                    'Entities': len(c['entities'])
+                                } for c in chain['claims']])
+                                st.dataframe(stats_df)
+                                
+                                # Add a separator between chains
+                                if idx < len(patterns['narrative_chains']) - 1:
+                                    st.markdown("---")
+                        else:
+                            st.info("No narrative chains found.")
+                            
+                except Exception as e:
+                    st.error(f"Error during pattern analysis: {str(e)}")
+                    st.exception(e)  # This will show the full traceback
     
     with tab3:
         st.subheader("Entity Explorer")

@@ -91,7 +91,7 @@ class KnowledgeGraph:
             return datetime.now()
     
     def add_content(self, content: Dict) -> None:
-        """Add new content to the knowledge graph"""
+        """Add new content to the knowledge graph with enhanced narrative chain support"""
         try:
             # Process text with SpaCy
             doc = self.nlp(content['text'])
@@ -100,50 +100,65 @@ class KnowledgeGraph:
             if 'timestamp' not in content or not content['timestamp']:
                 content['timestamp'] = self._extract_timestamp_from_text(content['text']).strftime('%Y-%m-%d %H:%M:%S')
             
-            # Extract entities
-            entities = self._extract_entities(doc)
-            
-            # Add claim node
+            # Create unique claim ID using timestamp
             claim_id = f"claim_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-            self.graph.add_node(claim_id, 
-                              type='CLAIM',
-                              text=content['text'],
-                              timestamp=content['timestamp'],
-                              credibility_score=content.get('credibility_score', 0.5),
-                              verified=content.get('verified', False))
             
-            # Add entities and their relationships
+            # Add claim node with enhanced attributes
+            self.graph.add_node(
+                claim_id,
+                type='CLAIM',
+                text=content['text'],
+                timestamp=content['timestamp'],
+                credibility_score=content.get('credibility_score', 0.5),
+                verified=content.get('verified', False),
+                entities=[]  # Will store extracted entities
+            )
+            
+            # Extract and add entities
+            entities = self._extract_entities(doc)
             for entity, entity_type in entities:
                 entity_id = f"{entity_type}_{entity}".lower()
                 
                 # Add entity node if it doesn't exist
                 if not self.graph.has_node(entity_id):
-                    self.graph.add_node(entity_id,
-                                      type=entity_type,
-                                      name=entity,
-                                      first_seen=datetime.now().isoformat())
+                    self.graph.add_node(
+                        entity_id,
+                        type=entity_type,
+                        name=entity,
+                        first_seen=datetime.now().isoformat()
+                    )
                 
                 # Connect entity to claim
-                self.graph.add_edge(claim_id, entity_id, 
-                                  relationship='MENTIONS',
-                                  timestamp=content['timestamp'])  # Use extracted timestamp
+                self.graph.add_edge(
+                    claim_id,
+                    entity_id,
+                    relationship='MENTIONS',
+                    timestamp=content['timestamp']
+                )
                 
-                # Update relationship counter
-                self.relationships[f'CLAIM-{entity_type}'] += 1
+                # Add entity to claim's entity list
+                self.graph.nodes[claim_id]['entities'].append(entity_id)
             
-            # Add source if available
-            if 'source' in content:
-                source_id = f"SOURCE_{content['source']}".lower()
-                self.graph.add_node(source_id,
-                                  type='SOURCE',
-                                  name=content['source'],
-                                  reliability_score=content.get('reliability_score', 0.5))
-                self.graph.add_edge(claim_id, source_id,
-                                  relationship='FROM_SOURCE',
-                                  timestamp=content['timestamp'])  # Use extracted timestamp
+            # Link to existing claims based on similarity
+            existing_claims = [n for n in self.graph.nodes() 
+                             if n.startswith('claim_') and n != claim_id]
             
-            # Add related claims based on entity overlap
-            self._link_related_claims(claim_id, entities)
+            for existing_claim in existing_claims:
+                similarity = self._calculate_claim_similarity(claim_id, existing_claim)
+                if similarity > 0.3:  # Adjust threshold as needed
+                    # Add edge with similarity score
+                    self.graph.add_edge(
+                        claim_id,
+                        existing_claim,
+                        relationship='RELATED_TO',
+                        similarity=similarity,
+                        timestamp=content['timestamp']
+                    )
+            
+            # Update relationship counter
+            self.relationships['CLAIM-ENTITY'] += len(entities)
+            
+            print(f"Added claim {claim_id} with {len(entities)} entities")  # Debug line
             
         except Exception as e:
             print(f"Error adding content to knowledge graph: {e}")
@@ -477,14 +492,15 @@ class KnowledgeGraph:
                              time_window: str = "Day",
                              include_weekends: bool = True,
                              chain_length: int = 3,
-                             similarity_threshold: float = 0.7) -> Dict:
+                             similarity_threshold: float = 0.3) -> Dict:
         """
         Analyze patterns in claims with enhanced misinformation detection
         """
+        # Initialize patterns dictionary with default values
         patterns = {
             'common_entities': defaultdict(int),
             'source_reliability': defaultdict(list),
-            'temporal_patterns': defaultdict(int),
+            'temporal_patterns': {},
             'narrative_chains': [],
             'co_occurrence_network': None,
             'temporal_heatmap': None,
@@ -493,7 +509,16 @@ class KnowledgeGraph:
                         'Friday', 'Saturday', 'Sunday'],
                 'hours': list(range(24)),
                 'max_value': 0,
-                'min_value': 0
+                'min_value': 0,
+                'distribution': {},
+                'total_entries': 0,
+                'average_per_slot': 0.0
+            },
+            'metadata': {
+                'total_claims': 0,
+                'verified_claims': 0,
+                'avg_credibility': 0.0,
+                'risk_level': 'LOW'
             },
             'misinformation_indicators': {
                 'high_risk_claims': [],
@@ -501,19 +526,13 @@ class KnowledgeGraph:
                 'verification_status': defaultdict(int),
                 'credibility_distribution': defaultdict(int),
                 'source_credibility': defaultdict(list)
-            },
-            'analysis_metadata': {
-                'total_claims': 0,
-                'verified_claims': 0,
-                'avg_credibility': 0.0,
-                'risk_level': 'LOW'
             }
         }
     
         try:
             # Get all claim nodes and initialize metadata
             claim_nodes = [n for n in self.graph.nodes() if n.startswith('claim_')]
-            patterns['analysis_metadata']['total_claims'] = len(claim_nodes)
+            patterns['metadata']['total_claims'] = len(claim_nodes)  # Changed from analysis_metadata
             credibility_scores = []
     
             # Process all claims first for metadata
@@ -526,10 +545,10 @@ class KnowledgeGraph:
                 verified = attrs.get('verified', False)
                 patterns['misinformation_indicators']['verification_status'][str(verified)] += 1
                 if verified:
-                    patterns['analysis_metadata']['verified_claims'] += 1
+                    patterns['metadata']['verified_claims'] += 1  # Changed from analysis_metadata
                 
                 # Track high-risk claims
-                if credibility < 0.3:  # High risk threshold
+                if credibility < 0.3:
                     patterns['misinformation_indicators']['high_risk_claims'].append({
                         'claim_id': claim,
                         'text': attrs.get('text', ''),
@@ -539,14 +558,14 @@ class KnowledgeGraph:
                     })
     
                 # Track credibility distribution
-                credibility_bin = round(credibility * 10) / 10  # Round to nearest 0.1
+                credibility_bin = round(credibility * 10) / 10
                 patterns['misinformation_indicators']['credibility_distribution'][str(credibility_bin)] += 1
     
             # Calculate average credibility and set risk level
             if credibility_scores:
                 avg_cred = sum(credibility_scores) / len(credibility_scores)
-                patterns['analysis_metadata']['avg_credibility'] = avg_cred
-                patterns['analysis_metadata']['risk_level'] = (
+                patterns['metadata']['avg_credibility'] = avg_cred
+                patterns['metadata']['risk_level'] = (
                     'HIGH' if avg_cred < 0.3 else 'MEDIUM' if avg_cred < 0.7 else 'LOW'
                 )
     
@@ -595,109 +614,139 @@ class KnowledgeGraph:
                                   credibility_score=(e1_cred + e2_cred) / 2)
                 
                 patterns['co_occurrence_network'] = G
+                
     
             elif analysis_type == "Temporal Patterns":
                 # Initialize temporal analysis structures
                 temporal_data = []
                 heatmap_data = np.zeros((7, 24))
-                risk_heatmap = np.zeros((7, 24))  # Track risk scores over time
+                risk_heatmap = np.zeros((7, 24))
                 current_date = datetime.now()
                 
+                # Initialize time range variables
+                min_time = None
+                max_time = None
+                
+                # Process claims for temporal analysis
                 for node, attrs in self.graph.nodes(data=True):
                     if node.startswith('claim_'):
                         try:
-                            text = attrs.get('text', '')
-                            time_pattern = r'\((\d{1,2}):(\d{2})\s*(AM|PM|am|pm)?\)'
-                            time_match = re.search(time_pattern, text)
+                            # Get timestamp from node attributes first
+                            timestamp = attrs.get('timestamp')
+                            if timestamp:
+                                timestamp = datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S')
+                            else:
+                                # Extract from text if not in attributes
+                                text = attrs.get('text', '')
+                                time_match = re.search(r'\((\d{1,2}):(\d{2})\s*(?:AM|PM)?\)', text)
+                                
+                                if time_match:
+                                    hour = int(time_match.group(1))
+                                    minute = int(time_match.group(2))
+                                    
+                                    # Adjust hour for PM if needed
+                                    if "PM" in text.upper() and hour != 12:
+                                        hour += 12
+                                    elif "AM" in text.upper() and hour == 12:
+                                        hour = 0
+                                        
+                                    timestamp = current_date.replace(
+                                        hour=hour,
+                                        minute=minute,
+                                        second=0,
+                                        microsecond=0
+                                    )
+                                else:
+                                    timestamp = current_date
                             
-                            if time_match:
-                                hour = int(time_match.group(1))
-                                minute = int(time_match.group(2))
-                                ampm = time_match.group(3)
-                                
-                                if ampm and ampm.upper() == 'PM' and hour != 12:
-                                    hour += 12
-                                elif ampm and ampm.upper() == 'AM' and hour == 12:
-                                    hour = 0
-                                
-                                timestamp = current_date.replace(
-                                    hour=hour,
-                                    minute=minute,
-                                    second=0,
-                                    microsecond=0
-                                )
-                                
-                                temporal_data.append(timestamp)
-                                
-                                # Update both regular and risk heatmaps
-                                day_idx = timestamp.weekday()
-                                hour_idx = timestamp.hour
-                                heatmap_data[day_idx][hour_idx] += 1
-                                
-                                # Add risk score to risk heatmap
-                                risk_score = 1 - attrs.get('credibility_score', 0.5)
-                                risk_heatmap[day_idx][hour_idx] += risk_score
-                                
+                            temporal_data.append(timestamp)
+                            
+                            # Update time range
+                            if min_time is None or timestamp < min_time:
+                                min_time = timestamp
+                            if max_time is None or timestamp > max_time:
+                                max_time = timestamp
+                            
+                            # Update heatmaps
+                            day_idx = timestamp.weekday()
+                            hour_idx = timestamp.hour
+                            
+                            heatmap_data[day_idx][hour_idx] += 1
+                            risk_score = 1 - attrs.get('credibility_score', 0.5)
+                            risk_heatmap[day_idx][hour_idx] += risk_score
+                            
                         except Exception as e:
                             print(f"Error processing timestamp for node {node}: {e}")
                             continue
-                
+            
                 if temporal_data:
                     temporal_data.sort()
-                    time_windows = {
-                        "Hour": timedelta(hours=1),
-                        "Day": timedelta(days=1),
-                        "Week": timedelta(weeks=1),
-                        "Month": timedelta(days=30)
-                    }
-                    window = time_windows.get(time_window, timedelta(days=1))
+                    min_time = min(temporal_data)
+                    max_time = max(temporal_data)
                     
-                    if len(temporal_data) > 0:
-                        min_time = min(temporal_data)
-                        max_time = max(temporal_data)
-                        current = min_time
-                        
-                        while current <= max_time:
-                            next_window = current + window
-                            window_claims = [t for t in temporal_data if current <= t < next_window]
-                            patterns['temporal_patterns'][current.strftime('%Y-%m-%d %H:%M:%S')] = len(window_claims)
-                            current = next_window
-                        
-                        # Update metadata with risk information
-                        patterns['temporal_metadata'].update({
-                            'max_value': float(np.max(heatmap_data)),
-                            'min_value': float(np.min(heatmap_data)),
-                            'total_entries': len(temporal_data),
-                            'average_per_slot': float(np.mean(heatmap_data)),
-                            'max_risk_hour': int(np.argmax(np.sum(risk_heatmap, axis=0))),
-                            'max_risk_day': int(np.argmax(np.sum(risk_heatmap, axis=1))),
-                            'risk_heatmap': risk_heatmap.tolist(),
-                            'time_range': {
-                                'start': min_time.strftime('%I:%M %p'),
-                                'end': max_time.strftime('%I:%M %p'),
-                                'duration_minutes': int((max_time - min_time).total_seconds() / 60)
-                            }
-                        })
-                        
-                        patterns['temporal_heatmap'] = heatmap_data.tolist()
-                        
-                        # Enhanced distribution statistics
-                        patterns['temporal_metadata']['distribution'] = {
+                    # Create hourly bins for visualization
+                    hourly_counts = defaultdict(int)
+                    for timestamp in temporal_data:
+                        # Round to nearest hour for binning
+                        hour_key = timestamp.replace(minute=0, second=0, microsecond=0)
+                        hourly_counts[hour_key] += 1
+                    
+                    # Convert to sorted list of timestamps and counts
+                    sorted_hours = sorted(hourly_counts.items())
+                    
+                    # Calculate average per slot (using number of unique hours with activity)
+                    unique_hours = len(hourly_counts)  # Number of unique hours with events
+                    average_per_slot = len(temporal_data) / float(unique_hours) if unique_hours > 0 else 0.0
+                    
+                    # Create temporal patterns dictionary
+                    patterns['temporal_patterns'] = {
+                        timestamp.strftime('%Y-%m-%d %H:%M:%S'): count
+                        for timestamp, count in sorted_hours
+                    }
+                    
+                    # Define days and hours for heatmap
+                    days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']
+                    hours = [f"{h:02d}:00" for h in range(24)]
+                    
+                    # Update metadata with complete information
+                    patterns['temporal_metadata'] = {
+                        'max_value': float(np.max(heatmap_data)),
+                        'min_value': float(np.min(heatmap_data)),
+                        'total_entries': len(temporal_data),
+                        'average_per_slot': average_per_slot,  # Now properly calculated
+                        'max_risk_hour': int(np.argmax(np.sum(risk_heatmap, axis=0))),
+                        'max_risk_day': int(np.argmax(np.sum(risk_heatmap, axis=1))),
+                        'risk_heatmap': risk_heatmap.tolist(),
+                        'start_time': min_time.strftime('%Y-%m-%d %H:%M:%S'),
+                        'end_time': max_time.strftime('%Y-%m-%d %H:%M:%S'),
+                        'time_window': time_window,
+                        'days': days,
+                        'hours': hours,
+                        'distribution': {
                             'total_events': len(temporal_data),
                             'unique_hours': len(set(t.hour for t in temporal_data)),
                             'unique_days': len(set(t.weekday() for t in temporal_data)),
-                            'events_by_hour': {f"{h:02d}:00": int(sum(heatmap_data[:, h])) 
-                                             for h in range(24) if sum(heatmap_data[:, h]) > 0},
-                            'risk_by_hour': {f"{h:02d}:00": float(sum(risk_heatmap[:, h]))
-                                           for h in range(24) if sum(risk_heatmap[:, h]) > 0}
+                            'events_by_hour': {
+                                f"{h:02d}:00": int(sum(heatmap_data[:, h])) 
+                                for h in range(24) if sum(heatmap_data[:, h]) > 0
+                            },
+                            'risk_by_hour': {
+                                f"{h:02d}:00": float(sum(risk_heatmap[:, h]))
+                                for h in range(24) if sum(risk_heatmap[:, h]) > 0
+                            }
                         }
+                    }
+                    
+                    patterns['temporal_heatmap'] = heatmap_data.tolist()
+                        
     
             else:  # Narrative Chains
                 visited = set()
+                chains = []
                 
                 for claim in claim_nodes:
                     if claim not in visited:
-                        chain = []
+                        current_chain = []
                         queue = [(claim, [])]
                         
                         while queue:
@@ -707,7 +756,7 @@ class KnowledgeGraph:
                                 
                                 if current.startswith('claim_'):
                                     attrs = self.graph.nodes[current]
-                                    chain.append({
+                                    current_chain.append({
                                         'claim_id': current,
                                         'text': attrs.get('text', ''),
                                         'timestamp': attrs.get('timestamp', ''),
@@ -716,45 +765,98 @@ class KnowledgeGraph:
                                         'entities': list(self.graph.neighbors(current))
                                     })
                                 
-                                for neighbor in self.graph.neighbors(current):
-                                    if (neighbor.startswith('claim_') and 
-                                        neighbor not in visited and 
-                                        neighbor not in path):
-                                        similarity = self._calculate_claim_similarity(current, neighbor)
+                                # Find related claims
+                                for other_claim in claim_nodes:
+                                    if (other_claim != current and 
+                                        other_claim not in visited and 
+                                        other_claim not in path):
+                                        
+                                        similarity = self._calculate_claim_similarity(current, other_claim)
                                         if similarity >= similarity_threshold:
-                                            queue.append((neighbor, path + [current]))
+                                            queue.append((other_claim, path + [current]))
                         
-                        if len(chain) >= chain_length:
-                            # Calculate chain risk metrics
-                            chain_credibility = [c['credibility_score'] for c in chain]
-                            avg_credibility = sum(chain_credibility) / len(chain_credibility)
-                            credibility_trend = chain_credibility[-1] - chain_credibility[0]
-                            verification_ratio = sum(1 for c in chain if c['verified']) / len(chain)
-                            
-                            # Create chain visualization with risk information
-                            chain_graph = nx.DiGraph()
-                            for i in range(len(chain)-1):
-                                chain_graph.add_edge(
-                                    chain[i]['claim_id'],
-                                    chain[i+1]['claim_id'],
-                                    credibility_delta=chain_credibility[i+1] - chain_credibility[i]
-                                )
-                            
-                            chain.append({
-                                'chain_graph': chain_graph,
-                                'avg_credibility': avg_credibility,
-                                'credibility_trend': credibility_trend,
-                                'verification_ratio': verification_ratio,
-                                'risk_level': 'HIGH' if avg_credibility < 0.3 else 'MEDIUM' if avg_credibility < 0.7 else 'LOW'
-                            })
-                            
-                            patterns['narrative_chains'].append(chain)
+                        if len(current_chain) >= chain_length:
+                            chains.append(current_chain)
+                
+                # Process and add chains to patterns
+                for chain in chains:
+                    if len(chain) >= chain_length:
+                        # Create chain visualization graph
+                        chain_graph = nx.DiGraph()
+                        
+                        # Add nodes with attributes
+                        for claim_data in chain:
+                            chain_graph.add_node(
+                                claim_data['claim_id'],
+                                text=claim_data['text'],
+                                credibility_score=claim_data['credibility_score'],
+                                timestamp=claim_data['timestamp']
+                            )
+                        
+                        # Add edges with similarity scores
+                        for i in range(len(chain)-1):
+                            similarity = self._calculate_claim_similarity(
+                                chain[i]['claim_id'],
+                                chain[i+1]['claim_id']
+                            )
+                            chain_graph.add_edge(
+                                chain[i]['claim_id'],
+                                chain[i+1]['claim_id'],
+                                relationship='follows',
+                                similarity=similarity
+                            )
+                        
+                        # Calculate chain metrics
+                        credibility_scores = [c['credibility_score'] for c in chain]
+                        avg_credibility = sum(credibility_scores) / len(credibility_scores)
+                        
+                        # Add chain to patterns
+                        patterns['narrative_chains'].append({
+                            'claims': chain,
+                            'chain_graph': chain_graph,
+                            'avg_credibility': avg_credibility,
+                            'length': len(chain)
+                        })
+                        pass
             
-            return patterns
+            print(f"Found {len(patterns['narrative_chains'])} narrative chains")  # Debug line
+            
+            return patterns  # Add return here, before except
             
         except Exception as e:
-            st.error(f"Error in pattern analysis: {str(e)}")
-            return patterns
+            print(f"Error in pattern analysis: {e}")
+            # Return a default patterns dictionary with basic structure
+            return {
+                'common_entities': {},
+                'source_reliability': {},
+                'temporal_patterns': {},
+                'narrative_chains': [],
+                'co_occurrence_network': None,
+                'temporal_heatmap': None,
+                'temporal_metadata': {
+                    'days': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 
+                            'Friday', 'Saturday', 'Sunday'],
+                    'hours': list(range(24)),
+                    'max_value': 0,
+                    'min_value': 0,
+                    'distribution': {},
+                    'total_entries': 0,
+                    'average_per_slot': 0.0
+                },
+                'metadata': {  # Add metadata to error return
+                    'total_claims': 0,
+                    'verified_claims': 0,
+                    'avg_credibility': 0.0,
+                    'risk_level': 'LOW'
+                },
+                'misinformation_indicators': {
+                    'high_risk_claims': [],
+                    'suspicious_entities': {},
+                    'verification_status': {},
+                    'credibility_distribution': {},
+                    'source_credibility': {}
+                }
+            }
 
     def visualize_temporal_patterns(self, patterns: Dict) -> None:
         """Visualize temporal patterns with enhanced graphics"""
@@ -943,17 +1045,43 @@ class KnowledgeGraph:
             st.error(f"Error visualizing misinformation patterns: {str(e)}")
               
     def _calculate_claim_similarity(self, claim1: str, claim2: str) -> float:
-        """Calculate similarity between two claims"""
+        """Calculate similarity between two claims with enhanced metrics"""
         try:
-            # Get claim texts
+            # Get claim texts and attributes
             text1 = self.graph.nodes[claim1].get('text', '')
             text2 = self.graph.nodes[claim2].get('text', '')
             
-            # Use SpaCy for similarity
+            # Get entities for both claims
+            entities1 = set(self.graph.nodes[claim1].get('entities', []))
+            entities2 = set(self.graph.nodes[claim2].get('entities', []))
+            
+            # Calculate text similarity using SpaCy
             doc1 = self.nlp(text1)
             doc2 = self.nlp(text2)
+            text_similarity = doc1.similarity(doc2)
             
-            return doc1.similarity(doc2)
+            # Calculate entity overlap
+            entity_similarity = len(entities1.intersection(entities2)) / max(len(entities1.union(entities2)), 1)
+            
+            # Calculate temporal proximity (if timestamps exist)
+            temporal_similarity = 0.0
+            try:
+                time1 = datetime.strptime(self.graph.nodes[claim1]['timestamp'], '%Y-%m-%d %H:%M:%S')
+                time2 = datetime.strptime(self.graph.nodes[claim2]['timestamp'], '%Y-%m-%d %H:%M:%S')
+                time_diff = abs((time1 - time2).total_seconds() / 3600)  # Convert to hours
+                temporal_similarity = 1.0 / (1.0 + time_diff)  # Normalize to 0-1
+            except:
+                temporal_similarity = 0.0
+            
+            # Combine similarities with weights
+            final_similarity = (
+                0.4 * text_similarity +
+                0.4 * entity_similarity +
+                0.2 * temporal_similarity
+            )
+            
+            return final_similarity
+            
         except Exception as e:
             print(f"Error calculating similarity: {e}")
             return 0.0
@@ -1460,3 +1588,189 @@ class KnowledgeGraph:
             if 'relationship' in data:
                 types.add(data['relationship'])
         return types
+    
+    def visualize_chain(self, chain_graph: nx.DiGraph) -> None:
+        """
+        Visualize a narrative chain using Plotly
+        
+        Parameters:
+        -----------
+        chain_graph : networkx.DiGraph
+            Directed graph representing the narrative chain
+        """
+        try:
+            if not chain_graph or chain_graph.number_of_nodes() == 0:
+                st.info("No chain data to visualize.")
+                return
+    
+            # Create position layout
+            pos = nx.spring_layout(chain_graph)
+    
+            # Create edge trace
+            edge_x = []
+            edge_y = []
+            edge_text = []
+            
+            for edge in chain_graph.edges(data=True):
+                x0, y0 = pos[edge[0]]
+                x1, y1 = pos[edge[1]]
+                edge_x.extend([x0, x1, None])
+                edge_y.extend([y0, y1, None])
+                
+                # Add edge information
+                relationship = edge[2].get('relationship', 'follows')
+                similarity = edge[2].get('similarity', 0.0)
+                edge_text.append(f"{relationship} (similarity: {similarity:.2f})")
+    
+            edge_trace = go.Scatter(
+                x=edge_x,
+                y=edge_y,
+                line=dict(
+                    width=1,
+                    color='rgba(150, 150, 150, 0.5)'
+                ),
+                hoverinfo='text',
+                text=edge_text,
+                mode='lines'
+            )
+    
+            # Create node traces
+            node_x = []
+            node_y = []
+            node_text = []
+            node_colors = []
+            node_sizes = []
+    
+            for node in chain_graph.nodes():
+                x, y = pos[node]
+                node_x.append(x)
+                node_y.append(y)
+                
+                # Get node attributes
+                attrs = chain_graph.nodes[node]
+                credibility = attrs.get('credibility_score', 0.5)
+                text = attrs.get('text', '')[:100] + '...'  # Truncate long texts
+                
+                # Create hover text
+                hover_text = (
+                    f"Claim ID: {node}<br>"
+                    f"Credibility: {credibility:.2%}<br>"
+                    f"Text: {text}"
+                )
+                node_text.append(hover_text)
+                
+                # Color based on credibility
+                node_colors.append(self._get_credibility_color(credibility))
+                
+                # Size based on importance
+                size = 20 + 10 * chain_graph.degree(node)
+                node_sizes.append(size)
+    
+            node_trace = go.Scatter(
+                x=node_x,
+                y=node_y,
+                mode='markers',
+                hoverinfo='text',
+                text=node_text,
+                marker=dict(
+                    size=node_sizes,
+                    color=node_colors,
+                    line=dict(width=2, color='white')
+                )
+            )
+    
+            # Create figure
+            fig = go.Figure(
+                data=[edge_trace, node_trace],
+                layout=go.Layout(
+                    title='Narrative Chain Visualization',
+                    titlefont=dict(size=16, color='white'),
+                    showlegend=False,
+                    hovermode='closest',
+                    margin=dict(b=20,l=5,r=5,t=40),
+                    annotations=[],
+                    xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+                    plot_bgcolor='rgb(17, 17, 17)',
+                    paper_bgcolor='rgb(17, 17, 17)',
+                    font=dict(color='white')
+                )
+            )
+    
+            # Add chain statistics
+            stats_text = (
+                f"Chain Length: {chain_graph.number_of_nodes()}<br>"
+                f"Connections: {chain_graph.number_of_edges()}<br>"
+                f"Avg. Credibility: {self._get_average_credibility(chain_graph):.2%}"
+            )
+            
+            fig.add_annotation(
+                text=stats_text,
+                xref="paper",
+                yref="paper",
+                x=0,
+                y=1.1,
+                showarrow=False,
+                font=dict(color='white'),
+                align="left"
+            )
+    
+            # Display in Streamlit
+            st.plotly_chart(fig, use_container_width=True)
+    
+            # Add chain metrics
+            with st.expander("Chain Metrics"):
+                col1, col2, col3 = st.columns(3)
+                
+                with col1:
+                    st.metric(
+                        "Chain Length",
+                        chain_graph.number_of_nodes()
+                    )
+                
+                with col2:
+                    avg_cred = self._get_average_credibility(chain_graph)
+                    st.metric(
+                        "Avg. Credibility",
+                        f"{avg_cred:.2%}"
+                    )
+                
+                with col3:
+                    coherence = self._calculate_chain_coherence(chain_graph)
+                    st.metric(
+                        "Chain Coherence",
+                        f"{coherence:.2%}"
+                    )
+    
+        except Exception as e:
+            st.error(f"Error visualizing narrative chain: {str(e)}")
+    
+    def _get_credibility_color(self, score: float) -> str:
+        """Get color based on credibility score"""
+        if score >= 0.7:
+            return 'rgb(0, 255, 0)'  # Green for high credibility
+        elif score >= 0.4:
+            return 'rgb(255, 165, 0)'  # Orange for medium credibility
+        else:
+            return 'rgb(255, 0, 0)'  # Red for low credibility
+    
+    def _get_average_credibility(self, chain_graph: nx.DiGraph) -> float:
+        """Calculate average credibility of claims in the chain"""
+        scores = [
+            data.get('credibility_score', 0.5)
+            for _, data in chain_graph.nodes(data=True)
+        ]
+        return sum(scores) / len(scores) if scores else 0.0
+    
+    def _calculate_chain_coherence(self, chain_graph: nx.DiGraph) -> float:
+        """Calculate coherence of the narrative chain"""
+        try:
+            # Get all similarities from edges
+            similarities = [
+                data.get('similarity', 0.0)
+                for _, _, data in chain_graph.edges(data=True)
+            ]
+            return sum(similarities) / len(similarities) if similarities else 0.0
+        except Exception as e:
+            print(f"Error calculating chain coherence: {e}")
+            return 0.0
