@@ -1549,8 +1549,58 @@ def knowledge_graph_tab():
             st.warning("Please select at least one entity type.")
                           
 def main():
-    st.set_page_config(page_title="Real-time Misinformation Detector", 
-                       layout="wide")
+    # Must be the first Streamlit command
+    st.set_page_config(page_title="Real-time Misinformation Detector", layout="wide")
+    
+    # Then add custom CSS
+    st.markdown("""
+        <style>
+        .sidebar-nav {
+            padding: 10px;
+        }
+        .nav-link {
+            padding: 8px 15px;
+            margin: 5px 0;
+            border-radius: 5px;
+            background-color: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            text-decoration: none;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .nav-link:hover {
+            background-color: rgba(255, 255, 255, 0.2);
+            transform: translateX(5px);
+        }
+        .nav-link.active {
+            background-color: rgba(255, 255, 255, 0.2);
+            border-left: 4px solid #ff4b4b;
+        }
+        .system-status {
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            margin: 10px 0;
+        }
+        .about-section {
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 10px;
+            margin: 10px 0;
+        }
+        .help-section {
+            margin-top: 20px;
+        }
+        .version-tag {
+            font-size: 0.8em;
+            opacity: 0.7;
+            text-align: center;
+            margin-top: 10px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
     
     # Initialize session state objects
     if 'detector' not in st.session_state:
@@ -1559,73 +1609,107 @@ def main():
     if 'dashboard_manager' not in st.session_state:
         st.session_state.dashboard_manager = DashboardManager()
     
-    # Add sidebar navigation
-    st.sidebar.title("Navigation")
-    
-    # Add logo/header to sidebar (optional)
-    # st.sidebar.image("path_to_your_logo.png", width=100)  # Optional: Add your logo
-    # st.sidebar.markdown("---")  # Add a separator
-    
-    # Create navigation menu
-    nav_selection = st.sidebar.radio(
-        "Go to",
-        [
-            "🔍 Text Analysis",
-            "📡 Live Monitor",
-            "📊 Dashboard",
-            "🚨 Alerts",
-            "🕸️ Knowledge Graph",
-            "🔌 Integrations"
-        ]
-    )
-    
-    # Add additional sidebar info
+    # Sidebar Header with Logo
+    st.sidebar.markdown("""
+        <div style="text-align: center;">
+            <h1 style="color: #ff4b4b;">Misinformation Detection System</h1>
+        </div>
+    """, unsafe_allow_html=True)
+
+    # Navigation Options
+    nav_options = {
+        "🔍 Text Analysis": "text_analysis",
+        "📡 Live Monitor": "live_monitor",
+        "📊 Dashboard": "dashboard",
+        "🚨 Alerts": "alerts",
+        "🕸️ Knowledge Graph": "knowledge_graph",
+        "🔌 Integrations": "integrations"
+    }
+
+    # Store the current page in session state if not present
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "text_analysis"
+
+    # Create navigation menu with custom styling
+    for label, page in nav_options.items():
+        button_style = """
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+            padding: 10px;
+            margin: 5px 0;
+            transition: all 0.3s ease;
+        """
+        if st.session_state.current_page == page:
+            button_style += """
+                border-left: 4px solid #ff4b4b;
+                background-color: rgba(255, 255, 255, 0.2);
+            """
+        
+        if st.sidebar.button(
+            label,
+            key=f"nav_{page}",
+            use_container_width=True,
+            help=f"Navigate to {label}"
+        ):
+            st.session_state.current_page = page
+            st.rerun()
+
+    # System Status with Enhanced UI
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### System Status")
+    st.sidebar.markdown("""
+        <div class="system-status">
+            <h3>System Status</h3>
+            <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="width: 10px; height: 10px; background: #00ff00; border-radius: 50%;"></div>
+                <span>System Online</span>
+            </div>
+        </div>
+    """, unsafe_allow_html=True)
+    
     st.sidebar.metric(
         "Active Alerts",
-        len(st.session_state.detector.alert_system.alerts)
+        len(st.session_state.detector.alert_system.alerts),
+        delta="real-time"
     )
     
-    # Navigation logic
-    if nav_selection == "🔍 Text Analysis":
+    # Navigation logic based on session state
+    if st.session_state.current_page == "text_analysis":
         text_analysis_tab()
-    
-    elif nav_selection == "📡 Live Monitor":
+    elif st.session_state.current_page == "live_monitor":
         live_monitor_tab()
-    
-    elif nav_selection == "📊 Dashboard":
+    elif st.session_state.current_page == "dashboard":
         dashboard_tab()
-    
-    elif nav_selection == "🚨 Alerts":
+    elif st.session_state.current_page == "alerts":
         alerts_tab()
-    
-    elif nav_selection == "🕸️ Knowledge Graph":
+    elif st.session_state.current_page == "knowledge_graph":
         knowledge_graph_tab()
-        
-    elif nav_selection == "🔌 Integrations":
+    elif st.session_state.current_page == "integrations":
         integration_settings_tab()
     
-    # Add footer to sidebar
+    # Enhanced About Section
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### About")
-    st.sidebar.info(
-        """
-        This is a real-time misinformation detection system.
-        Version: 1.0.0
-        """
-    )
+    st.sidebar.markdown("""
+        <div class="about-section">
+            <h3>About</h3>
+            <p> This is a real-time misinformation detection system.</p>
+            <div class="version-tag">Version 1.0.0</div>
+        </div>
+    """, unsafe_allow_html=True)
     
-    # Add help section to sidebar
-    with st.sidebar.expander("Need Help?"):
+    # Enhanced Help Section
+    with st.sidebar.expander("📚 Quick Guide"):
         st.markdown("""
-        **Quick Start Guide:**
-        1. Use Text Analysis for single text analysis
-        2. Use Live Monitor for real-time monitoring
-        3. Check Dashboard for overall statistics
-        4. Monitor Alerts for important notifications
-        5. Configure Integrations for external connections
-        """)
-
+            <div class="help-section">
+                <ol style="padding-left: 20px;">
+                    <li>🔍 Use <b>Text Analysis</b> for single text analysis</li>
+                    <li>📡 Use <b>Live Monitor</b> for real-time monitoring</li>
+                    <li>📊 Check <b>Dashboard</b> for overall statistics</li>
+                    <li>🚨 Monitor <b>Alerts</b> for important notifications</li>
+                    <li>🕸️ View <b>Knowledge Graph</b> for claim relationships</li>
+                    <li>🔌 Configure <b>Integrations</b> for external connections</li>
+                </ol>
+            </div>
+        """, unsafe_allow_html=True)
+        
 if __name__ == "__main__":
     main()
