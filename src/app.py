@@ -812,19 +812,39 @@ def live_monitor_tab():
 
     # Show export button for flagged articles
     if st.session_state.monitoring_results:
-        st.download_button(
-            "📥 Export Results",
-            data=pd.DataFrame([{
-                'timestamp': r['timestamp'],
-                'title': r.get('title', ''),
-                'text': r['text'],
-                'source': r['source'],
-                'risk_score': r.get('analysis', {}).get('risk_score', 0) * 100,
-                'credibility_score': r.get('analysis', {}).get('fact_check_results', {}).get('credibility_score', 0) * 100
-            } for r in st.session_state.monitoring_results]).to_csv(index=False),
-            file_name=f"news_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-            mime='text/csv'
-        )
+        try:
+            export_data = []
+            for r in st.session_state.monitoring_results:
+                # Extract data with fallbacks for missing keys
+                export_item = {
+                    'timestamp': r.get('timestamp', ''),
+                    'title': r.get('title', ''),
+                    'source': r.get('source', ''),
+                    'risk_score': 0.0,
+                    'credibility_score': 0.0
+                }
+                
+                # Get text from either 'text' key or 'sentence' key
+                export_item['text'] = r.get('text', r.get('sentence', ''))
+                
+                # Get analysis scores if available
+                analysis = r.get('analysis', {})
+                if analysis:
+                    export_item['risk_score'] = analysis.get('risk_score', 0) * 100
+                    fact_check = analysis.get('fact_check_results', {})
+                    export_item['credibility_score'] = fact_check.get('credibility_score', 0) * 100
+                
+                export_data.append(export_item)
+            
+            # Create DataFrame and export
+            st.download_button(
+                "📥 Export Results",
+                data=pd.DataFrame(export_data).to_csv(index=False),
+                file_name=f"news_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime='text/csv'
+            )
+        except Exception as e:
+            st.error(f"Error preparing export: {str(e)}")
 
     # Monitoring logic
     if st.session_state.monitoring_active:
