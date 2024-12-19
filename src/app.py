@@ -31,6 +31,8 @@ from datetime import datetime
 from knowledge_graph import KnowledgeGraph
 import json
 import networkx as nx
+from broadcast.stream import BroadcastStream, BroadcastMessage
+from broadcast.analyzer import BroadcastAnalyzer
 
 # Load environment variables and download NLTK data
 load_dotenv()
@@ -739,182 +741,248 @@ def text_analysis_tab():
                 
                 display_live_results(results)
 
-
+async def start_monitoring(source_type, settings, monitoring_speed):
+    """Start monitoring based on source type"""
+    try:
+        while True:
+            items = []
+            
+            if source_type in ["All Sources", "News API"]:
+                news_items = await st.session_state.broadcast_stream.news_source.fetch_newsapi()
+                items.extend(news_items)
+                
+            if source_type in ["All Sources", "Guardian"]:
+                guardian_items = await st.session_state.broadcast_stream.news_source.fetch_guardian()
+                items.extend(guardian_items)
+                
+            if source_type in ["All Sources", "Twitter"]:
+                social_items = await st.session_state.broadcast_stream.social_monitor.monitor_twitter()
+                items.extend(social_items)
+            
+            # Process items
+            for item in items:
+                message = BroadcastMessage(
+                    text=item['text'],
+                    timestamp=item['timestamp'],
+                    source=item['source'],
+                    metadata=item['metadata']
+                )
+                await st.session_state.broadcast_analyzer.process_message(message)
+            
+            # Wait before next fetch
+            await asyncio.sleep(monitoring_speed)
+            
+    except Exception as e:
+        st.error(f"Error during monitoring: {str(e)}")
+        
 def live_monitor_tab():
     st.title("📡 Live Broadcast Monitor")
     
-    # Initialize monitoring results if not exists
+    if 'monitoring_active' not in st.session_state:
+        st.session_state.monitoring_active = False
+    
     if 'monitoring_results' not in st.session_state:
         st.session_state.monitoring_results = []
-    
-    source_type = st.selectbox(
-        "Select Source",
-        ["Live News Feed", "Social Media Stream", "Custom Input"]
-    )
-    
-    placeholder = st.empty()
-    
-    # Add monitoring controls
-    col1, col2, col3 = st.columns([2, 1, 1])
-    with col1:
-        monitoring_speed = st.slider("Monitoring Speed (seconds)", 1, 10, 2)
-    with col2:
-        auto_refresh = st.checkbox("Auto Refresh", value=True)
-    with col3:
-        if st.button("Reset Monitoring"):
-            st.session_state.monitoring_results = []
-            st.session_state.detector.alert_system.alerts = []  # Clear alerts
-            placeholder.empty()
-            st.success("Monitoring reset successfully!")
-            return
-    
-    if source_type == "Live News Feed":
-        if st.button("Start Monitoring"):
-            # Sample live feed data with potential misinformation
-            live_feeds = [
-                "Breaking news: Major technological breakthrough announced in renewable energy.",
-                "ALERT: Unverified reports claim 5G towers cause health issues! #conspiracy",
-                "Scientists discover new species in the Amazon rainforest.",
-                "URGENT: Secret government documents reveal shocking conspiracy! Must share!",
-                "Latest update: Stock market manipulation by AI algorithms, experts warn.",
-                "BREAKING: Miracle cure for all diseases discovered! Buy now at discount!",
-                "New study confirms climate change impacts on global weather patterns.",
-                "EXPOSED: Deep state operatives controlling social media! Share before deleted!"
-            ]
-            
-            with st.spinner("Monitoring live feed..."):
-                for feed in live_feeds:
-                    # Analyze the feed using existing detector
-                    results = st.session_state.detector.analyze_text(feed)
-                    st.session_state.monitoring_results.extend(results)
-                    
-                    # Update display
-                    with placeholder.container():
-                        # Show latest feed with timestamp
-                        st.subheader("Latest Feed")
-                        st.info(f"[{datetime.now().strftime('%H:%M:%S')}] {feed}")
-                        
-                        # Alert status
-                        alerts = sum(1 for r in results if r['risk_score'] > 0.7)
-                        if alerts > 0:
-                            st.error(f"🚨 {alerts} high-risk content detected in this feed!")
-                        
-                        # Display results
-                        display_live_results(st.session_state.monitoring_results)
-                        
-                        # Show monitoring statistics
-                        stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
-                        with stats_col1:
-                            st.metric("Active Feeds", len(st.session_state.monitoring_results))
-                        with stats_col2:
-                            avg_risk = np.mean([r['risk_score'] for r in st.session_state.monitoring_results])
-                            st.metric("Average Risk", f"{avg_risk:.2%}")
-                        with stats_col3:
-                            high_risk = sum(1 for r in st.session_state.monitoring_results if r['risk_score'] > 0.7)
-                            st.metric("High Risk Alerts", high_risk)
-                        with stats_col4:
-                            total_alerts = len(st.session_state.detector.alert_system.alerts)
-                            st.metric("Total Alerts", total_alerts)
-                    
-                    time.sleep(monitoring_speed)
-    
-    elif source_type == "Social Media Stream":
-        if st.button("Start Monitoring"):
-            # Sample social media posts with potential misinformation
-            social_posts = [
-                "Just heard that AI will replace all jobs by next year! #tech #future",
-                "New study shows regular exercise improves mental health. #health #wellness",
-                "SHOCKING: Celebrity reveals government mind control program! #conspiracy",
-                "Beautiful sunset at the beach today! 🌅 #nature #peace",
-                "This miracle product cures everything in 24 hours! DM for details! #health",
-                "URGENT: Share this before they delete it! Hidden truth revealed! #wakeup",
-                "Scientific study confirms benefits of meditation. #mindfulness",
-                "EXPOSED: Secret society controlling world events! Must read! #truth"
-            ]
-            
-            with st.spinner("Monitoring social media..."):
-                for post in social_posts:
-                    results = st.session_state.detector.analyze_text(post)
-                    st.session_state.monitoring_results.extend(results)
-                    
-                    with placeholder.container():
-                        # Show latest post with timestamp
-                        st.subheader("Latest Social Media Post")
-                        st.info(f"[{datetime.now().strftime('%H:%M:%S')}] {post}")
-                        
-                        # Alert status
-                        alerts = sum(1 for r in results if r['risk_score'] > 0.7)
-                        if alerts > 0:
-                            st.error(f"🚨 {alerts} high-risk content detected in this post!")
-                        
-                        # Display results
-                        display_live_results(st.session_state.monitoring_results)
-                        
-                        # Show hashtag analysis
-                        hashtags = [tag for tag in post.split() if tag.startswith('#')]
-                        if hashtags:
-                            st.write("🏷️ Trending Hashtags:", ', '.join(hashtags))
-                        
-                        # Show monitoring statistics
-                        stats_col1, stats_col2, stats_col3, stats_col4 = st.columns(4)
-                        with stats_col1:
-                            st.metric("Monitored Posts", len(st.session_state.monitoring_results))
-                        with stats_col2:
-                            avg_risk = np.mean([r['risk_score'] for r in st.session_state.monitoring_results])
-                            st.metric("Average Risk", f"{avg_risk:.2%}")
-                        with stats_col3:
-                            high_risk = sum(1 for r in st.session_state.monitoring_results if r['risk_score'] > 0.7)
-                            st.metric("High Risk Posts", high_risk)
-                        with stats_col4:
-                            total_alerts = len(st.session_state.detector.alert_system.alerts)
-                            st.metric("Total Alerts", total_alerts)
-                    
-                    time.sleep(monitoring_speed)
-    
-    elif source_type == "Custom Input":
-        custom_input = st.text_area("Enter custom text to monitor:")
-        if st.button("Analyze Custom Input"):
-            if custom_input:
-                results = st.session_state.detector.analyze_text(custom_input)
-                st.session_state.monitoring_results.extend(results)
-                
-                with placeholder.container():
-                    # Show input with timestamp
-                    st.subheader("Custom Input Analysis")
-                    st.info(f"[{datetime.now().strftime('%H:%M:%S')}] {custom_input}")
-                    
-                    # Alert status
-                    alerts = sum(1 for r in results if r['risk_score'] > 0.7)
-                    if alerts > 0:
-                        st.error(f"🚨 {alerts} high-risk content detected in this input!")
-                    
-                    # Display results
-                    display_live_results(st.session_state.monitoring_results)
-                    
-                    # Show monitoring statistics
-                    stats_col1, stats_col2 = st.columns(2)
-                    with stats_col1:
-                        high_risk = sum(1 for r in results if r['risk_score'] > 0.7)
-                        st.metric("High Risk Content", high_risk)
-                    with stats_col2:
-                        total_alerts = len(st.session_state.detector.alert_system.alerts)
-                        st.metric("Total Alerts", total_alerts)
 
-    # Add export functionality
+    # Monitoring controls
+    col1, col2, col3 = st.columns([2, 1, 1])
+    
+    with col1:
+        monitoring_speed = st.slider("Update Interval (seconds)", 5, 30, 10)
+    
+    with col2:
+        if not st.session_state.monitoring_active:
+            if st.button("▶️ Start Monitoring"):
+                st.session_state.monitoring_active = True
+                st.rerun()
+        else:
+            if st.button("⏹️ Stop Monitoring"):
+                st.session_state.monitoring_active = False
+                st.rerun()
+    
+    with col3:
+        if st.button("🔄 Reset"):
+            st.session_state.monitoring_active = False
+            st.session_state.monitoring_results = []
+            st.rerun()
+
+    # Create placeholders
+    status_placeholder = st.empty()
+    news_container = st.container()
+
+    # Show export button for flagged articles
     if st.session_state.monitoring_results:
         st.download_button(
-            label="📥 Export Monitoring Results",
+            "📥 Export Results",
             data=pd.DataFrame([{
                 'timestamp': r['timestamp'],
-                'text': r['sentence'],
-                'risk_score': r['risk_score'],
-                'credibility_score': r['fact_check_results']['credibility_score'],
-                'alerts': sum(1 for a in st.session_state.detector.alert_system.alerts 
-                            if a.source_text == r['sentence'])
+                'title': r.get('title', ''),
+                'text': r['text'],
+                'source': r['source'],
+                'risk_score': r.get('analysis', {}).get('risk_score', 0) * 100,
+                'credibility_score': r.get('analysis', {}).get('fact_check_results', {}).get('credibility_score', 0) * 100
             } for r in st.session_state.monitoring_results]).to_csv(index=False),
-            file_name=f"monitoring_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            file_name=f"news_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
             mime='text/csv'
         )
+
+    # Monitoring logic
+    if st.session_state.monitoring_active:
+        status_placeholder.info("🔄 Monitoring active...")
+        
+        try:
+            async def monitoring_loop():
+                while st.session_state.monitoring_active:
+                    articles = await st.session_state.broadcast_stream.news_source.fetch_news()
+                    
+                    if articles:
+                        with news_container:
+                            for article in articles:
+                                # Create message
+                                message = BroadcastMessage(
+                                    text=article['text'],
+                                    timestamp=article['timestamp'],
+                                    source=article['source'],
+                                    metadata={
+                                        'url': article.get('url', ''),
+                                        'author': article.get('author', '')
+                                    }
+                                )
+                                
+                                # Analyze content
+                                analysis = await st.session_state.broadcast_analyzer.process_message(message)
+                                
+                                if analysis:
+                                    # Store result
+                                    result = {**article, 'analysis': analysis}
+                                    st.session_state.monitoring_results.append(result)
+                                    
+                                    # Display article in a card-like format
+                                    st.markdown("---")  # Separator between articles
+                                    
+                                    # Article header
+                                    st.markdown(f"### 📰 {article['title']}")
+                                    
+                                    # Article content and analysis
+                                    col1, col2 = st.columns([3, 1])
+                                    
+                                    with col1:
+                                        st.markdown(f"**Source:** {article['source']}")
+                                        st.markdown(article['text'])
+                                        st.markdown(f"*Published: {article['timestamp']}*")
+                                        if article.get('url'):
+                                            st.markdown(f"[Read more]({article['url']})")
+                                    
+                                    with col2:
+                                        risk_score = analysis.get('risk_score', 0) * 100
+                                        credibility_score = analysis.get('fact_check_results', {}).get('credibility_score', 0) * 100
+                                        
+                                        # Risk level indicator
+                                        if risk_score > 70:
+                                            st.error(f"High Risk: {risk_score:.1f}%")
+                                        elif risk_score > 40:
+                                            st.warning(f"Medium Risk: {risk_score:.1f}%")
+                                        else:
+                                            st.success(f"Low Risk: {risk_score:.1f}%")
+                                        
+                                        st.metric("Credibility", f"{credibility_score:.1f}%")
+                                        
+                                        if risk_score > 70:
+                                            st.warning("⚠️ Potential misinformation detected!")
+                                    
+                                    # Analysis details in tabs instead of expander
+                                    tab1, tab2 = st.tabs(["Key Points", "Full Analysis"])
+                                    
+                                    with tab1:
+                                        st.markdown("**Key Findings:**")
+                                        st.markdown(f"- Risk Level: {'High' if risk_score > 70 else 'Medium' if risk_score > 40 else 'Low'}")
+                                        st.markdown(f"- Credibility Score: {credibility_score:.1f}%")
+                                        if analysis.get('key_terms'):
+                                            st.markdown(f"- Key Terms: {', '.join(analysis['key_terms'])}")
+                                    
+                                    with tab2:
+                                        st.json(analysis)
+                    
+                    await asyncio.sleep(monitoring_speed)
+            
+            # Run the monitoring loop
+            asyncio.run(monitoring_loop())
+            
+        except Exception as e:
+            st.error(f"Monitoring error: {str(e)}")
+            st.session_state.monitoring_active = False
+
+def display_monitoring_stats(results):
+    """Display monitoring statistics"""
+    if not results:
+        return
+        
+    col1, col2, col3, col4 = st.columns(4)
+    
+    with col1:
+        st.metric("Total Items", len(results))
+    with col2:
+        high_risk = sum(1 for r in results if r['analysis'].get('risk_score', 0) > 0.7)
+        st.metric("High Risk Items", high_risk)
+    with col3:
+        avg_risk = np.mean([r['analysis'].get('risk_score', 0) for r in results]) * 100
+        st.metric("Average Risk", f"{avg_risk:.1f}%")
+    with col4:
+        avg_cred = np.mean([r['analysis'].get('credibility_score', 0) for r in results]) * 100
+        st.metric("Average Credibility", f"{avg_cred:.1f}%")
+
+def export_results_as_csv(results):
+    """Convert monitoring results to CSV"""
+    df = pd.DataFrame([{
+        'timestamp': r.get('timestamp', ''),
+        'source': r.get('source', ''),
+        'text': r.get('text', ''),
+        'risk_score': r.get('analysis', {}).get('risk_score', 0) * 100,
+        'credibility_score': r.get('analysis', {}).get('credibility_score', 0) * 100,
+        'alerts': len([a for a in st.session_state.detector.alert_system.alerts 
+                      if a.source_text == r.get('text', '')])
+    } for r in results])
+    
+    return df.to_csv(index=False)
+
+async def process_broadcast_item(item, placeholder):
+    """Process a single broadcast item"""
+    try:
+        # Create broadcast message
+        message = BroadcastMessage(
+            text=item['text'],
+            timestamp=item['timestamp'],
+            source=item['source'],
+            metadata=item['metadata']
+        )
+
+        # Analyze the message
+        analysis_result = await st.session_state.broadcast_analyzer.process_message(message)
+
+        # Add to monitoring results
+        if analysis_result:
+            st.session_state.monitoring_results.append({
+                **item,
+                'analysis': analysis_result
+            })
+
+        # Update display
+        with placeholder.container():
+            # Show latest message
+            st.subheader("Latest Message")
+            st.info(f"[{datetime.now().strftime('%H:%M:%S')}] {message.text}")
+
+            # Show analysis results
+            if analysis_result:
+                # Alert status
+                if analysis_result.get('risk_score', 0) > 0.7:
+                    st.error("🚨 High-risk content detected!")
+
+                # Display results
+                display_live_results(st.session_state.monitoring_results)
+
+    except Exception as e:
+        st.error(f"Error processing broadcast item: {str(e)}")
         
 def dashboard_tab():
     """Display the dashboard tab content"""
@@ -1608,6 +1676,20 @@ def main():
     
     if 'dashboard_manager' not in st.session_state:
         st.session_state.dashboard_manager = DashboardManager()
+        
+    if 'broadcast_stream' not in st.session_state:
+        news_api_key = os.getenv('NEWS_API_KEY')
+        if not news_api_key:
+            st.error("NEWS_API_KEY not found in environment variables")
+            st.stop()
+        
+        st.session_state.broadcast_stream = BroadcastStream()
+        
+    if 'broadcast_analyzer' not in st.session_state:
+        st.session_state.broadcast_analyzer = BroadcastAnalyzer(
+            st.session_state.detector,
+            st.session_state.detector.knowledge_graph
+        )
     
     # Sidebar Header with Logo
     st.sidebar.markdown("""

@@ -18,17 +18,16 @@ def download_nltk_data():
         resources = [
             'punkt',
             'stopwords',
-            'averaged_perceptron_tagger',
+            'averaged_perceptron_tagger',  # Changed from averaged_perceptron_tagger_eng
             'maxent_ne_chunker',
             'words',
-            'punkt_tab',  # Added this
-            'brown',      # Added this
-            'wordnet'     # Added this
+            'brown',
+            'wordnet'
         ]
 
         for resource in resources:
             try:
-                nltk.download(resource, quiet=True, raise_on_error=True)
+                nltk.download(resource, download_dir=nltk_data_dir, quiet=True)
             except Exception as e:
                 print(f"Error downloading {resource}: {e}")
 
