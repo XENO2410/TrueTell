@@ -18,7 +18,7 @@ def download_nltk_data():
         resources = [
             'punkt',
             'stopwords',
-            'averaged_perceptron_tagger',  # Changed from averaged_perceptron_tagger_eng
+            'averaged_perceptron_tagger',
             'maxent_ne_chunker',
             'words',
             'brown',
