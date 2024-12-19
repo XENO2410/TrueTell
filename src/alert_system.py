@@ -5,6 +5,11 @@ import streamlit as st
 from dataclasses import dataclass
 import json
 import os
+import requests
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 @dataclass
 class Alert:
@@ -27,8 +32,125 @@ class AlertSystem:
             'sentiment_threshold': -0.7,
             'misleading_content': 0.8
         }
+        # Get integration settings from environment variables
+        self.webhook_url = os.getenv('WEBHOOK_URL')
+        self.slack_token = os.getenv('SLACK_TOKEN')
+        self.slack_channel = os.getenv('SLACK_CHANNEL')
         self.load_alerts()
 
+    def send_to_webhook(self, alert: Alert) -> bool:
+        """Send alert to webhook"""
+        try:
+            # Format the alert data similar to the working integration
+            payload = {
+                "message": alert.message,
+                "risk_score": alert.risk_score,
+                "timestamp": alert.timestamp,
+                "severity": alert.severity,
+                "type": alert.type,
+                "source_text": alert.source_text,
+                "metadata": alert.metadata,
+                "status": alert.status,
+                # Add any additional fields you want to include
+                "alert_id": alert.id
+            }
+            
+            # Send the request without any special headers
+            response = requests.post(
+                self.webhook_url,
+                json=payload
+            )
+            
+            # Check if request was successful (status code 200)
+            if response.ok:
+                st.success("✅ Sent to Webhook successfully!")
+                return True
+            else:
+                st.error(f"Webhook error: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            st.error(f"Error sending to webhook: {str(e)}")
+            return False
+
+    def send_to_slack(self, alert: Alert) -> bool:
+        """Send alert to Slack"""
+        try:
+            # Prepare Slack message with blocks for better formatting
+            message = {
+                "channel": self.slack_channel,
+                "blocks": [
+                    {
+                        "type": "header",
+                        "text": {
+                            "type": "plain_text",
+                            "text": f"🚨 Alert: {alert.type}"
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "fields": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"*Severity:* {alert.severity}"
+                            },
+                            {
+                                "type": "mrkdwn",
+                                "text": f"*Risk Score:* {alert.risk_score:.2%}"
+                            }
+                        ]
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Message:*\n{alert.message}"
+                        }
+                    },
+                    {
+                        "type": "section",
+                        "text": {
+                            "type": "mrkdwn",
+                            "text": f"*Source Text:*\n{alert.source_text}"
+                        }
+                    },
+                    {
+                        "type": "context",
+                        "elements": [
+                            {
+                                "type": "mrkdwn",
+                                "text": f"Alert ID: {alert.id} | Time: {alert.timestamp}"
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+            response = requests.post(
+                'https://slack.com/api/chat.postMessage',
+                headers={
+                    'Authorization': f'Bearer {self.slack_token}',
+                    'Content-Type': 'application/json'
+                },
+                json=message
+            )
+            
+            if response.ok:
+                slack_data = response.json()
+                if slack_data.get('ok', False):
+                    return True
+                else:
+                    st.error(f"Slack API error: {slack_data.get('error', 'Unknown error')}")
+                    return False
+            else:
+                st.error(f"Slack error: {response.status_code} - {response.text}")
+                return False
+                
+        except Exception as e:
+            st.error(f"Error sending to Slack: {str(e)}")
+            return False
+
+    # Keep all your existing methods unchanged
     def load_alerts(self):
         """Load alerts from storage"""
         try:
@@ -186,6 +308,19 @@ class AlertSystem:
                     
                     with col2:
                         st.write("**Status:**", alert.status)
+                        
+                        # Integration buttons
+                        col_a, col_b = st.columns(2)
+                        with col_a:
+                            if st.button("📤 Webhook", key=f"webhook_{alert.id}_{idx}"):
+                                if self.send_to_webhook(alert):
+                                    st.success("✅ Sent!")
+                        with col_b:
+                            if st.button("💬 Slack", key=f"slack_{alert.id}_{idx}"):
+                                if self.send_to_slack(alert):
+                                    st.success("✅ Sent!")
+                        
+                        # Status buttons
                         if alert.status != 'RESOLVED':
                             if st.button("Mark Resolved", key=f"resolve_{alert.id}_{idx}"):
                                 self.update_alert_status(alert.id, 'RESOLVED')
