@@ -14,7 +14,7 @@ import plotly.express as px
 import networkx as nx
 import re
 import pandas as pd
-
+import plotly.graph_objects as go
 
 class KnowledgeGraph:
     def __init__(self):
@@ -1774,3 +1774,162 @@ class KnowledgeGraph:
         except Exception as e:
             print(f"Error calculating chain coherence: {e}")
             return 0.0
+        
+    def visualize_3d(self):
+        """Create interactive 3D visualization"""
+        try:
+            # Using plotly for 3D visualization
+            pos = nx.spring_layout(self.graph, dim=3)
+            
+            # Create node traces
+            node_trace = go.Scatter3d(
+                x=[pos[node][0] for node in self.graph.nodes()],
+                y=[pos[node][1] for node in self.graph.nodes()],
+                z=[pos[node][2] for node in self.graph.nodes()],
+                mode='markers+text',
+                text=list(self.graph.nodes()),
+                marker=dict(
+                    size=10,
+                    color=self.get_node_colors(),
+                    opacity=0.8,
+                    symbol='circle'
+                )
+            )
+            
+            # Create edge traces
+            edge_trace = go.Scatter3d(
+                x=[], y=[], z=[],
+                mode='lines',
+                line=dict(
+                    color='rgba(125,125,125,0.5)',
+                    width=2
+                )
+            )
+            
+            # Add edges
+            for edge in self.graph.edges():
+                x0, y0, z0 = pos[edge[0]]
+                x1, y1, z1 = pos[edge[1]]
+                edge_trace['x'] += (x0, x1, None)
+                edge_trace['y'] += (y0, y1, None)
+                edge_trace['z'] += (z0, z1, None)
+                
+            # Create figure
+            fig = go.Figure(data=[edge_trace, node_trace])
+            
+            # Update layout
+            fig.update_layout(
+                scene=dict(
+                    xaxis=dict(showbackground=False),
+                    yaxis=dict(showbackground=False),
+                    zaxis=dict(showbackground=False),
+                ),
+                margin=dict(r=0, l=0, b=0, t=0)
+            )
+            
+            return fig
+            
+        except Exception as e:
+            print(f"Error in 3D visualization: {e}")
+            return None
+    
+    def calculate_relationship_strength(self, node1, node2):
+        """Calculate relationship strength between nodes"""
+        try:
+            # Factors affecting relationship strength
+            factors = {
+                'interaction_frequency': self._calculate_interaction_frequency(node1, node2),
+                'temporal_proximity': self._calculate_temporal_proximity(node1, node2),
+                'semantic_similarity': self._calculate_semantic_similarity(node1, node2),
+                'shared_connections': self._calculate_shared_connections(node1, node2)
+            }
+            
+            # Weighted combination
+            weights = {
+                'interaction_frequency': 0.4,
+                'temporal_proximity': 0.2,
+                'semantic_similarity': 0.2,
+                'shared_connections': 0.2
+            }
+            
+            strength = sum(score * weights[factor] for factor, score in factors.items())
+            return strength
+            
+        except Exception as e:
+            print(f"Error calculating relationship strength: {e}")
+            return 0.0
+
+    def _calculate_interaction_frequency(self, node1: str, node2: str) -> float:
+        """Calculate interaction frequency between nodes"""
+        try:
+            # Count direct connections
+            direct = int(self.graph.has_edge(node1, node2) or self.graph.has_edge(node2, node1))
+            
+            # Count shared neighbors
+            neighbors1 = set(self.graph.neighbors(node1))
+            neighbors2 = set(self.graph.neighbors(node2))
+            shared = len(neighbors1.intersection(neighbors2))
+            
+            # Normalize score
+            max_interactions = max(len(neighbors1), len(neighbors2))
+            return (direct + shared) / (max_interactions + 1) if max_interactions > 0 else 0
+            
+        except Exception as e:
+            print(f"Error calculating interaction frequency: {e}")
+            return 0.0
+    
+    def _calculate_temporal_proximity(self, node1: str, node2: str) -> float:
+        """Calculate temporal proximity between nodes"""
+        try:
+            # Get timestamps
+            time1 = datetime.strptime(self.graph.nodes[node1].get('timestamp', ''), '%Y-%m-%d %H:%M:%S')
+            time2 = datetime.strptime(self.graph.nodes[node2].get('timestamp', ''), '%Y-%m-%d %H:%M:%S')
+            
+            # Calculate time difference in hours
+            time_diff = abs((time1 - time2).total_seconds() / 3600)
+            
+            # Normalize score (closer to 1 means more recent)
+            return 1.0 / (1.0 + time_diff)
+            
+        except Exception as e:
+            print(f"Error calculating temporal proximity: {e}")
+            return 0.0
+    
+    def _calculate_semantic_similarity(self, node1: str, node2: str) -> float:
+        """Calculate semantic similarity between nodes"""
+        try:
+            # Get node texts
+            text1 = self.graph.nodes[node1].get('text', '')
+            text2 = self.graph.nodes[node2].get('text', '')
+            
+            # Calculate similarity using SpaCy
+            doc1 = self.nlp(text1)
+            doc2 = self.nlp(text2)
+            
+            return doc1.similarity(doc2)
+            
+        except Exception as e:
+            print(f"Error calculating semantic similarity: {e}")
+            return 0.0
+    
+    def _calculate_shared_connections(self, node1: str, node2: str) -> float:
+        """Calculate shared connection score"""
+        try:
+            neighbors1 = set(self.graph.neighbors(node1))
+            neighbors2 = set(self.graph.neighbors(node2))
+            
+            shared = len(neighbors1.intersection(neighbors2))
+            total = len(neighbors1.union(neighbors2))
+            
+            return shared / total if total > 0 else 0
+            
+        except Exception as e:
+            print(f"Error calculating shared connections: {e}")
+            return 0.0
+        
+    def get_node_colors(self) -> List[str]:
+        """Get colors for nodes based on their type"""
+        return [
+            self.colors.get(self.graph.nodes[node].get('type', 'Unknown'), '#888888')
+            for node in self.graph.nodes()
+        ]

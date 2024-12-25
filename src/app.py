@@ -33,6 +33,7 @@ import json
 import networkx as nx
 from broadcast.stream import BroadcastStream, BroadcastMessage
 from broadcast.analyzer import BroadcastAnalyzer
+import plotly.graph_objects as go
 
 # Load environment variables and download NLTK data
 load_dotenv()
@@ -1217,34 +1218,143 @@ def knowledge_graph_tab():
     tab1, tab2, tab3 = st.tabs(["Graph View", "Pattern Analysis", "Entity Explorer"])
     
     with tab1:
+        # Add visualization type selector
+        viz_type = st.radio(
+            "Select Visualization Type",
+            ["2D Network", "3D Network"],
+            horizontal=True
+        )
+        
         col1, col2 = st.columns([3, 1])
         with col1:
             st.subheader("Graph Visualization")
             
-            # Add visualization controls
-            with st.expander("Visualization Settings"):
-                col_a, col_b = st.columns(2)
-                with col_a:
-                    min_weight = st.slider("Minimum Relationship Weight", 0.0, 1.0, 0.1)
-                    show_labels = st.checkbox("Show Node Labels", value=True)
-                with col_b:
-                    layout_type = st.selectbox("Layout Type", ["spring", "circular", "random"])
-                    node_size = st.slider("Node Size", 10, 50, 20)
+            if viz_type == "3D Network":
+                try:
+                    # 3D visualization controls
+                    with st.expander("3D Visualization Settings"):
+                        node_size = st.slider("Node Size", 5, 30, 10)
+                        edge_width = st.slider("Edge Width", 1, 10, 2)
+                    
+                    # Generate and display 3D visualization
+                    fig_3d = st.session_state.detector.knowledge_graph.visualize_3d()
+                    if fig_3d:
+                        st.plotly_chart(fig_3d, use_container_width=True)
+                    else:
+                        st.error("Failed to generate 3D visualization")
+                except Exception as e:
+                    st.error(f"Error in 3D visualization: {str(e)}")
+            else:
+                # 2D visualization code
+                with st.expander("Visualization Settings"):
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        min_weight = st.slider("Minimum Relationship Weight", 0.0, 1.0, 0.1)
+                        show_labels = st.checkbox("Show Node Labels", value=True)
+                    with col_b:
+                        layout_type = st.selectbox("Layout Type", ["spring", "circular", "random"])
+                        node_size = st.slider("Node Size", 10, 50, 20)
+                
+                # Add search and highlight
+                search_term = st.text_input("🔍 Search and Highlight Nodes", "")
+                highlighted_nodes = []
+                if search_term:
+                    highlighted_nodes = st.session_state.detector.knowledge_graph.search_nodes(search_term)
+                
+                # Visualize graph with settings
+                st.session_state.detector.knowledge_graph.visualize(
+                    min_weight=min_weight,
+                    show_labels=show_labels,
+                    layout=layout_type,
+                    node_size=node_size,
+                    highlight_nodes=highlighted_nodes
+                )
             
-            # Add search and highlight
-            search_term = st.text_input("🔍 Search and Highlight Nodes", "")
-            highlighted_nodes = []
-            if search_term:
-                highlighted_nodes = st.session_state.detector.knowledge_graph.search_nodes(search_term)
-            
-            # Visualize graph with settings
-            st.session_state.detector.knowledge_graph.visualize(
-                min_weight=min_weight,
-                show_labels=show_labels,
-                layout=layout_type,
-                node_size=node_size,
-                highlight_nodes=highlighted_nodes
-            )
+            # Add relationship strength analysis
+            with st.expander("Analyze Relationship Strength"):
+                col_r1, col_r2 = st.columns(2)
+                with col_r1:
+                    node1 = st.selectbox("Select First Node", 
+                                       list(st.session_state.detector.knowledge_graph.graph.nodes()))
+                with col_r2:
+                    node2 = st.selectbox("Select Second Node", 
+                                       list(st.session_state.detector.knowledge_graph.graph.nodes()))
+                
+                if st.button("Calculate Relationship Strength"):
+                    try:
+                        # Calculate individual components first
+                        interaction_freq = st.session_state.detector.knowledge_graph._calculate_interaction_frequency(node1, node2)
+                        temporal_prox = st.session_state.detector.knowledge_graph._calculate_temporal_proximity(node1, node2)
+                        semantic_sim = st.session_state.detector.knowledge_graph._calculate_semantic_similarity(node1, node2)
+                        shared_conn = st.session_state.detector.knowledge_graph._calculate_shared_connections(node1, node2)
+                        
+                        # Calculate overall strength
+                        strength = st.session_state.detector.knowledge_graph.calculate_relationship_strength(node1, node2)
+                        
+                        # Display gauge chart
+                        fig_gauge = go.Figure(go.Indicator(
+                            mode="gauge+number",
+                            value=strength * 100,
+                            domain={'x': [0, 1], 'y': [0, 1]},
+                            title={'text': "Overall Relationship Strength"},
+                            gauge={
+                                'axis': {'range': [0, 100]},
+                                'bar': {'color': "darkblue"},
+                                'steps': [
+                                    {'range': [0, 30], 'color': "red"},
+                                    {'range': [30, 70], 'color': "yellow"},
+                                    {'range': [70, 100], 'color': "green"}
+                                ]
+                            }
+                        ))
+                        st.plotly_chart(fig_gauge)
+                        
+                        # Display components
+                        st.subheader("Relationship Components")
+                        components = {
+                            'Interaction Frequency': interaction_freq,
+                            'Temporal Proximity': temporal_prox,
+                            'Semantic Similarity': semantic_sim,
+                            'Shared Connections': shared_conn
+                        }
+                        
+                        # Create DataFrame for components
+                        component_df = pd.DataFrame([
+                            {'Component': k, 'Score': v * 100} 
+                            for k, v in components.items()
+                        ])
+                        
+                        # Display components as a bar chart
+                        fig_components = px.bar(
+                            component_df,
+                            x='Component',
+                            y='Score',
+                            title="Relationship Components (Percentage)",
+                            color='Score',
+                            color_continuous_scale=['red', 'yellow', 'green'],
+                            range_y=[0, 100]
+                        )
+                        
+                        # Update layout for better readability
+                        fig_components.update_layout(
+                            xaxis_title="Component",
+                            yaxis_title="Score (%)",
+                            showlegend=False
+                        )
+                        
+                        st.plotly_chart(fig_components, use_container_width=True)
+                        
+                        # Display detailed metrics
+                        st.write("Detailed Component Scores:")
+                        for component, score in components.items():
+                            st.metric(
+                                component,
+                                f"{score:.2%}",
+                                delta=f"{(score - 0.5) * 100:+.1f}%" if score > 0 else None
+                            )
+                        
+                    except Exception as e:
+                        st.error(f"Error calculating relationship strength: {str(e)}")
             
             # Add refresh button
             if st.button("🔄 Refresh Visualization"):
@@ -1266,10 +1376,10 @@ def knowledge_graph_tab():
             # Display node type distribution with progress bars
             if 'node_types' in stats:
                 st.write("**Node Distribution:**")
-                max_count = max(stats['node_types'].values())
+                max_count = max(stats['node_types'].values()) if stats['node_types'] else 0
                 for node_type, count in stats['node_types'].items():
                     st.write(f"{node_type}")
-                    st.progress(count / max_count)
+                    st.progress(count / max_count if max_count > 0 else 0)
                     st.caption(f"Count: {count}")
             
             # Add graph metrics
