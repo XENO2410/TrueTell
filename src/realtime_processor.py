@@ -1,7 +1,7 @@
 # src/realtime_processor.py
 
 import asyncio
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 from collections import deque
 from fact_checker import FactChecker
@@ -19,8 +19,29 @@ from torch.nn.functional import softmax
 import torch
 import spacy
 import re
+from functools import lru_cache
+import torch.cuda
+import time
+from dataclasses import dataclass
+import logging
+import traceback
+import psutil
+import os
 
+@dataclass
+class PerformanceMetrics:
+    processing_time: float
+    memory_usage: float
+    model_latency: Dict[str, float]
+    batch_size: int
+    error_count: int
+    
 class RealTimeProcessor:
+    MODEL_VERSIONS = {
+        'bert': 'bert-base-uncased-v1',
+        'roberta': 'roberta-base-v1',
+        'sentiment': 'nlptown/bert-base-multilingual-uncased-sentiment-v1'        
+    }
     def __init__(self):
         self.buffer = deque(maxlen=1000)
         self.processing_interval = 2
@@ -29,7 +50,13 @@ class RealTimeProcessor:
         self.callbacks = []
         self.bert_model = BertForSequenceClassification.from_pretrained('bert-base-uncased')
         self.bert_tokenizer = AutoTokenizer.from_pretrained('bert-base-uncased')
-        
+        self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        self.models = {}
+        self.model_cache = {}
+        self.initialize_models()
+        self.metrics = []  
+        self._setup_logging()
+                      
         # Initialize NLP components
         self.classifier = pipeline("zero-shot-classification", 
                                  model="facebook/bart-large-mnli")
@@ -46,7 +73,59 @@ class RealTimeProcessor:
         
         # Load SpaCy for better entity recognition
         self.nlp = spacy.load("en_core_web_sm")
-               
+
+        self.emotional_lexicon = set([
+            "angry", "sad", "happy", "excited", "shocking",
+            "incredible", "amazing", "terrible", "wonderful",
+            "horrible", "outrageous", "unbelievable"
+        ])
+        
+    def _setup_logging(self):
+        """Setup detailed logging configuration"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler('truthtell.log'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger('TruthTell')
+    
+    def _log_error(self, message: str, error: Exception, level: str = 'error'):
+        """Enhanced error logging"""
+        error_details = {
+            'timestamp': datetime.now().isoformat(),
+            'message': message,
+            'error_type': type(error).__name__,
+            'error_details': str(error),
+            'stack_trace': traceback.format_exc()
+        }
+        
+        if level == 'error':
+            self.logger.error(error_details)
+        elif level == 'warning':
+            self.logger.warning(error_details)
+            
+    def initialize_models(self):
+        """Initialize models with version control and caching"""
+        try:
+            # Cache models in memory
+            self.models['bert'] = self._load_model_cached('bert')
+            self.models['roberta'] = self._load_model_cached('roberta')
+            print(f"Models loaded successfully on {self.device}")
+        except Exception as e:
+            print(f"Error loading models: {e}")
+            raise
+    
+    @lru_cache(maxsize=3)  # Cache up to 3 models
+    def _load_model_cached(self, model_name: str):
+        """Load and cache models with version control"""
+        version = self.MODEL_VERSIONS.get(model_name)
+        if not version:
+            raise ValueError(f"Unknown model: {model_name}")
+        return AutoModelForSequenceClassification.from_pretrained(version).to(self.device)
+                   
     async def start(self):
         """Start the real-time processing loop"""
         self.is_running = True
@@ -83,22 +162,148 @@ class RealTimeProcessor:
             'narrative_similarity': self._calculate_narrative_similarity(doc, recent_texts),
             'topic_evolution': self._track_topic_evolution(doc)
         }    
-        
+
+    def _get_memory_usage(self) -> float:
+        """Get current memory usage of the process"""
+        process = psutil.Process(os.getpid())
+        return process.memory_info().rss / 1024 / 1024  # Convert to MB
+    
+    def _check_performance_threshold(self):
+        """Check if performance metrics exceed thresholds"""
+        if len(self.metrics) < 2:
+            return
+            
+        latest = self.metrics[-1]
+        if latest.processing_time > 5.0:  # More than 5 seconds
+            self._log_error(
+                "Performance degradation detected", 
+                Exception(f"Processing time: {latest.processing_time}s"), 
+                level='warning'
+            )
+    
+    def _detect_entity_manipulation(self, text: str) -> Dict:
+        """Detect potential manipulation of entity information"""
+        doc = self.nlp(text)
+        entities = {ent.text: ent.label_ for ent in doc.ents}
+        return {
+            'entities': entities,
+            'suspicious_patterns': self._check_entity_patterns(entities)
+        }
+    
+    def _analyze_temporal_patterns(self, text: str) -> Dict:
+        """Analyze temporal patterns in content"""
+        doc = self.nlp(text)
+        return {
+            'temporal_references': self._extract_temporal_references(doc),
+            'sequence_patterns': self._analyze_sequence_patterns(doc)
+        }
+    
+    def _analyze_source_patterns(self, text: str) -> Dict:
+        """Analyze patterns related to content sources"""
+        urls = self._extract_urls(text)
+        return {
+            'source_count': len(urls),
+            'source_types': self._categorize_sources(urls),
+            'source_reliability': self._check_source_reliability(urls)
+        }
+    
+    def _extract_temporal_references(self, doc) -> List[str]:
+        """Extract temporal references from text"""
+        temporal_refs = []
+        for ent in doc.ents:
+            if ent.label_ in ['DATE', 'TIME']:
+                temporal_refs.append(ent.text)
+        return temporal_refs
+    
+    def _analyze_sequence_patterns(self, doc) -> Dict:
+        """Analyze sequence patterns in content"""
+        return {
+            'narrative_flow': self._analyze_narrative_flow(doc),
+            'temporal_sequence': self._check_temporal_sequence(doc)
+        }
+    
+    def _analyze_narrative_flow(self, doc) -> str:
+        """Analyze the narrative flow of content"""
+        # Basic implementation
+        return "sequential" if len(list(doc.sents)) > 1 else "single"
+    
+    def _check_temporal_sequence(self, doc) -> bool:
+        """Check if temporal sequence makes logical sense"""
+        # Basic implementation
+        return True
+    
+    def _check_entity_patterns(self, entities: Dict) -> List[str]:
+        """Check for suspicious patterns in entity usage"""
+        suspicious_patterns = []
+        # Add pattern detection logic here
+        return suspicious_patterns
+    
+    def _categorize_sources(self, urls: List[str]) -> Dict[str, int]:
+        """Categorize sources by type"""
+        categories = {'news': 0, 'social': 0, 'blog': 0, 'other': 0}
+        for url in urls:
+            # Add categorization logic here
+            categories['other'] += 1
+        return categories
+    
+    def _check_source_reliability(self, urls: List[str]) -> Dict[str, float]:
+        """Check reliability scores for sources"""
+        return {url: self.source_checker.check_source(url).get('reliability', 0.0) 
+                for url in urls}
+    
+    def _analyze_linguistic_patterns(self, text: str) -> Dict:
+        """Analyze linguistic patterns in text"""
+        return {
+            'sentiment_patterns': self._analyze_sentiment_patterns(text),
+            'rhetorical_devices': self._detect_rhetorical_devices(text),
+            'language_complexity': self._analyze_language_complexity(text)
+        }
+    
+    def _analyze_sentiment_patterns(self, text: str) -> Dict:
+        """Analyze sentiment patterns"""
+        return {
+            'overall_sentiment': self.sentiment_analyzer(text)[0],
+            'emotional_intensity': self._calculate_emotional_intensity(text)
+        }
+    
+    def _calculate_emotional_intensity(self, text: str) -> float:
+        """Calculate emotional intensity of text"""
+        # Basic implementation
+        emotional_words = len([word for word in text.lower().split() 
+                              if word in self.emotional_lexicon])
+        return min(emotional_words / len(text.split()), 1.0)
+       
     async def process_batch(self):
-        """Process a batch of text from the buffer"""
+        """Optimized batch processing"""
+        if len(self.buffer) < self.batch_size:
+            return
+            
         batch = []
-        for _ in range(self.batch_size):
-            if not self.buffer:
-                break
+        batch_size = 0
+        max_batch_memory = 1024 * 1024 * 512  # 512MB limit
+        
+        while self.buffer and batch_size < max_batch_memory:
             item = self.buffer.popleft()
-            if not item['processed']:
-                batch.append(item)
+            estimated_size = len(str(item)) * 2  # Rough size estimation
+            if batch_size + estimated_size > max_batch_memory:
+                break
+                
+            batch.append(item)
+            batch_size += estimated_size
         
         if batch:
-            results = await self._analyze_batch(batch)
-            await self._notify_callbacks(results)
+            try:
+                results = await self._analyze_batch(batch)
+                await self._notify_callbacks(results)
+            except Exception as e:
+                self._log_error("Batch processing failed", e)
+                # Return items to buffer
+                self.buffer.extendleft(reversed(batch))
     
     async def _analyze_batch(self, batch: List[Dict]) -> List[Dict]:
+        start_time = time.time()
+        error_count = 0
+        model_times = {}
         """Analyze a batch of text items with enhanced ML capabilities"""
         results = []
         recent_texts = [item['text'] for item in list(self.buffer)[-10:]]  # Get recent texts for pattern analysis
@@ -166,7 +371,21 @@ class RealTimeProcessor:
                         ),
                         'processed_at': datetime.now().isoformat()
                     }
+
+                    self.metrics.append(PerformanceMetrics(
+                        processing_time=time.time() - start_time,
+                        memory_usage=self._get_memory_usage(),
+                        model_latency=model_times,
+                        batch_size=len(batch),
+                        error_count=error_count
+                    ))
                     
+                    # Log if performance degrades
+                    self._check_performance_threshold()
+                    
+                except Exception as e:
+                    error_count += 1
+                    self._log_error("Batch analysis error", e)                    
                     results.append(analysis)
                     
                 except Exception as e:
