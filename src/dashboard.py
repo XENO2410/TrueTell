@@ -53,8 +53,8 @@ class DashboardManager:
         # Detailed analysis
         self._display_content_analysis(valid_results)
         
-        # Real-time alerts
-        self._display_alerts(valid_results)
+        # # Real-time alerts
+        # self._display_alerts(valid_results)
 
     def _parse_timestamp(self, timestamp_str: str) -> datetime:
         """Parse different timestamp formats"""

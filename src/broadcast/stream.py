@@ -8,6 +8,7 @@ import asyncio
 from .sources import NewsSource
 from .social_monitor import SocialMediaMonitor
 import os
+from .social_monitor import SocialMediaMonitor
 
 @dataclass
 class BroadcastMessage:
@@ -28,33 +29,38 @@ class BroadcastStream:
         news_api_key = os.getenv('NEWS_API_KEY')
         twitter_bearer_token = os.getenv('TWITTER_BEARER_TOKEN')
         
+        # Initialize news source
         if news_api_key:
             self.news_source = NewsSource(news_api_key)
         else:
             print("Warning: NEWS_API_KEY not found in environment variables")
             self.news_source = None
             
-        if twitter_bearer_token:
-            self.social_monitor = SocialMediaMonitor({
-                'bearer_token': twitter_bearer_token
-            })
-        else:
-            print("Warning: TWITTER_BEARER_TOKEN not found in environment variables")
-            self.social_monitor = None
-
+        # Initialize social monitor with all available credentials
+        auth_config = {
+            'bearer_token': twitter_bearer_token,
+            'api_key': os.getenv('TWITTER_API_KEY'),
+            'api_secret': os.getenv('TWITTER_API_SECRET'),
+            'access_token': os.getenv('TWITTER_ACCESS_TOKEN'),
+            'access_secret': os.getenv('TWITTER_ACCESS_SECRET')
+        }
+        
+        self.social_monitor = SocialMediaMonitor(auth_config)
+            
     async def fetch_all_sources(self) -> List[Dict]:
         """Fetch from all available sources"""
         all_items = []
         
         try:
+            # Get news items
             if self.news_source:
                 news_items = await self.news_source.fetch_news()
                 all_items.extend(news_items)
-                
-            if self.social_monitor:
-                social_items = await self.social_monitor.monitor_twitter()
-                all_items.extend(social_items)
-                
+            
+            # Get social media items
+            social_items = await self.social_monitor.monitor_all_platforms()
+            all_items.extend(social_items)
+            
         except Exception as e:
             print(f"Error fetching from sources: {e}")
             

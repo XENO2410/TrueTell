@@ -749,12 +749,8 @@ async def start_monitoring(source_type, settings, monitoring_speed):
             items = []
             
             if source_type in ["All Sources", "News API"]:
-                news_items = await st.session_state.broadcast_stream.news_source.fetch_newsapi()
+                news_items = await st.session_state.broadcast_stream.news_source.fetch_news()
                 items.extend(news_items)
-                
-            if source_type in ["All Sources", "Guardian"]:
-                guardian_items = await st.session_state.broadcast_stream.news_source.fetch_guardian()
-                items.extend(guardian_items)
                 
             if source_type in ["All Sources", "Twitter"]:
                 social_items = await st.session_state.broadcast_stream.social_monitor.monitor_twitter()
@@ -766,7 +762,7 @@ async def start_monitoring(source_type, settings, monitoring_speed):
                     text=item['text'],
                     timestamp=item['timestamp'],
                     source=item['source'],
-                    metadata=item['metadata']
+                    metadata=item.get('metadata', {})
                 )
                 await st.session_state.broadcast_analyzer.process_message(message)
             
@@ -784,6 +780,43 @@ def live_monitor_tab():
     
     if 'monitoring_results' not in st.session_state:
         st.session_state.monitoring_results = []
+        
+    # Add API Status Dashboard
+    with st.expander("API Status Dashboard", expanded=True):
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            # NewsAPI Status
+            st.markdown("### NewsAPI")
+            if st.session_state.broadcast_stream.news_source:
+                st.success("✅ Connected")
+                # Show last fetch time if available
+                if hasattr(st.session_state.broadcast_stream.news_source, 'last_fetch_time'):
+                    st.caption(f"Last fetch: {st.session_state.broadcast_stream.news_source.last_fetch_time}")
+            else:
+                st.error("❌ Not Connected")
+                st.caption("Check NEWS_API_KEY in environment variables")
+        
+        with col2:
+            # Twitter Status
+            st.markdown("### Twitter API")
+            status = st.session_state.broadcast_stream.social_monitor.get_status()
+            if status['twitter_enabled']:
+                st.success("✅ Connected")
+                rate_limits = status['rate_limit']
+                st.caption(f"Requests remaining: {rate_limits['requests_remaining']}")
+            else:
+                st.error("❌ Not Connected")
+                st.caption("Check Twitter credentials")
+        
+        with col3:
+            # Reddit Status
+            st.markdown("### Reddit API")
+            if status['reddit_enabled']:
+                st.success("✅ Connected")
+            else:
+                st.error("❌ Not Connected")
+                st.caption("Check Reddit credentials")
 
     # Monitoring controls
     col1, col2, col3 = st.columns([2, 1, 1])
@@ -1808,13 +1841,21 @@ def main():
         st.session_state.dashboard_manager = DashboardManager()
         
     if 'broadcast_stream' not in st.session_state:
-        news_api_key = os.getenv('NEWS_API_KEY')
-        if not news_api_key:
-            st.error("NEWS_API_KEY not found in environment variables")
+        try:
+            st.session_state.broadcast_stream = BroadcastStream()
+            
+            # Check if sources are available
+            if not st.session_state.broadcast_stream.news_source:
+                st.warning("News API source not available. Some features may be limited.")
+                
+            status = st.session_state.broadcast_stream.social_monitor.get_status()
+            if not any([status['twitter_enabled'], status['reddit_enabled']]):
+                st.warning("Social media monitoring not available. Some features may be limited.")
+                
+        except Exception as e:
+            st.error(f"Error initializing broadcast stream: {str(e)}")
             st.stop()
-        
-        st.session_state.broadcast_stream = BroadcastStream()
-        
+            
     if 'broadcast_analyzer' not in st.session_state:
         st.session_state.broadcast_analyzer = BroadcastAnalyzer(
             st.session_state.detector,
@@ -1868,21 +1909,52 @@ def main():
 
     # System Status with Enhanced UI
     st.sidebar.markdown("---")
+    
+    # Create status container
     st.sidebar.markdown("""
         <div class="system-status">
             <h3>System Status</h3>
-            <div style="display: flex; align-items: center; gap: 10px;">
-                <div style="width: 10px; height: 10px; background: #00ff00; border-radius: 50%;"></div>
-                <span>System Online</span>
-            </div>
         </div>
     """, unsafe_allow_html=True)
     
+    # Check API statuses
+    if 'broadcast_stream' in st.session_state:
+        # News API Status
+        news_status = "🟢 Active" if st.session_state.broadcast_stream.news_source else "🔴 Inactive"
+        st.sidebar.markdown(f"**NewsAPI:** {news_status}")
+        
+        # Social Media Status
+        if st.session_state.broadcast_stream.social_monitor:
+            status = st.session_state.broadcast_stream.social_monitor.get_status()
+            
+            # Twitter Status
+            twitter_status = "🟢 Active" if status['twitter_enabled'] else "🔴 Inactive"
+            st.sidebar.markdown(f"**Twitter API:** {twitter_status}")
+            
+            # Reddit Status
+            reddit_status = "🟢 Active" if status['reddit_enabled'] else "🔴 Inactive"
+            st.sidebar.markdown(f"**Reddit API:** {reddit_status}")
+            
+            # Rate Limits
+            if status['twitter_enabled'] or status['reddit_enabled']:
+                with st.sidebar.expander("API Rate Limits"):
+                    rate_limits = status['rate_limit']
+                    st.markdown(f"**Requests Remaining:** {rate_limits['requests_remaining']}")
+                    st.markdown(f"**Reset Time:** {rate_limits['reset_time']}")
+                    st.markdown(f"**Window:** {rate_limits['window_seconds']} seconds")
+        else:
+            st.sidebar.markdown("**Social Media APIs:** 🔴 Inactive")
+    
+    # Active Alerts Counter
     st.sidebar.metric(
         "Active Alerts",
         len(st.session_state.detector.alert_system.alerts),
         delta="real-time"
     )
+
+    # Add refresh button for API status
+    if st.sidebar.button("🔄 Refresh Status"):
+        st.rerun()
     
     # Navigation logic based on session state
     if st.session_state.current_page == "text_analysis":
