@@ -27,6 +27,7 @@ from integration_layer import (
     EmailIntegration
 )
 import requests
+import joblib
 from datetime import datetime
 from knowledge_graph import KnowledgeGraph
 import json
@@ -34,6 +35,7 @@ import networkx as nx
 from broadcast.stream import BroadcastStream, BroadcastMessage
 from broadcast.analyzer import BroadcastAnalyzer
 import plotly.graph_objects as go
+from model_trainer import ModelTrainer
 
 # Load environment variables and download NLTK data
 load_dotenv()
@@ -41,29 +43,95 @@ download_nltk_data()
 
 class MisinformationDetector:
     def __init__(self):
-        # Initialize NLTK components with error handling
+        # Create necessary directories
+        os.makedirs("models", exist_ok=True)
+        
+        # Initialize NLTK components first
+        nltk.download('punkt')
+        nltk.download('averaged_perceptron_tagger')
+        nltk.download('stopwords')
+        
+        self.punkt_tokenizer = nltk.data.load('tokenizers/punkt/english.pickle')
+        self.word_tokenizer = nltk.WordPunctTokenizer()
+        self.stop_words = set(stopwords.words('english'))
+        
+        # Initialize model
+        self.model = None
+        self.label_encoder = None
         try:
-            self.punkt_tokenizer = nltk.data.load('tokenizers/punkt/english.pickle')
-            self.word_tokenizer = nltk.WordPunctTokenizer()
-            self.stop_words = set(stopwords.words('english'))
-        except LookupError as e:
-            print(f"Error loading NLTK resources: {e}")
-            # Fallback initialization
-            self.punkt_tokenizer = None
-            self.word_tokenizer = None
-            self.stop_words = set()
+            model_path = "models/misinformation_detector.joblib"
+            if os.path.exists(model_path):
+                self.model = joblib.load(model_path)
+                print("Model loaded successfully")
+            else:
+                print("No trained model found - using zero-shot classification only")
+        except Exception as e:
+            print(f"Error loading model: {e}")
+        
+        # Initialize other components
+        try:
+            self.classifier = pipeline("zero-shot-classification", 
+                                     model="facebook/bart-large-mnli")
+            self.sentiment_analyzer = pipeline("sentiment-analysis")
+        except Exception as e:
+            print(f"Error initializing transformers: {e}")
             
-        self.classifier = pipeline("zero-shot-classification", 
-                                 model="facebook/bart-large-mnli")
-        self.sentiment_analyzer = pipeline("sentiment-analysis")
         self.fact_checker = FactChecker()
         self.source_checker = SourceChecker()
         self.alert_system = AlertSystem()
         self.knowledge_graph = KnowledgeGraph()
-        
-        # Initialize integration layer
         self.integration_layer = IntegrationLayer()
         self.setup_integrations()
+
+    def load_model(self):
+        """Load the pre-trained model and label encoder"""
+        try:
+            model_path = "models/misinformation_detector.joblib"
+            encoder_path = "models/label_encoder.joblib"
+            
+            if os.path.exists(model_path) and os.path.exists(encoder_path):
+                self.model = joblib.load(model_path)
+                self.label_encoder = joblib.load(encoder_path)
+                print("Model and label encoder loaded successfully")
+            else:
+                raise FileNotFoundError("Model or label encoder not found")
+                
+        except Exception as e:
+            print(f"Error loading model: {e}")
+            
+    def predict_misinformation(self, text: str) -> dict:
+        """
+        Predict if text contains misinformation using the trained model
+        """
+        try:
+            if self.model is None:
+                raise ValueError("Model not loaded")
+                
+            # Make prediction
+            prediction = self.model.predict([text])[0]
+            probabilities = self.model.predict_proba([text])[0]
+            
+            # Convert numeric label to string
+            label = self.label_encoder.inverse_transform([prediction])[0]
+            
+            # Get label names for probabilities
+            label_names = self.label_encoder.classes_
+            
+            # Create probability dictionary
+            prob_dict = {
+                name: float(prob) 
+                for name, prob in zip(label_names, probabilities)
+            }
+            
+            return {
+                'label': label,
+                'probabilities': prob_dict,
+                'confidence': float(max(probabilities))
+            }
+            
+        except Exception as e:
+            print(f"Prediction error: {e}")
+            return None
     
     def setup_integrations(self):
         """Setup integration providers"""
@@ -93,40 +161,33 @@ class MisinformationDetector:
             return []
         
         try:
-            if self.punkt_tokenizer:
-                return self.punkt_tokenizer.tokenize(text)
-            else:
-                # Fallback to sent_tokenize
-                return sent_tokenize(text)
+            sentences = self.punkt_tokenizer.tokenize(text)
+            return sentences
         except Exception as e:
             print(f"Error in sentence tokenization: {e}")
-            return [text]
-    
+            # Fallback to basic splitting
+            return [s.strip() for s in text.split('.') if s.strip()]
+
     def extract_key_terms(self, text: str) -> List[str]:
         """Extract key terms from text"""
         try:
-            # Use word tokenizer if available, otherwise fall back to word_tokenize
-            tokens = (self.word_tokenizer.tokenize(text) if self.word_tokenizer 
-                     else word_tokenize(text))
+            tokens = self.word_tokenizer.tokenize(text.lower())
+            # Filter tokens
+            tokens = [token for token in tokens 
+                     if token.isalnum() 
+                     and token not in self.stop_words 
+                     and len(token) > 2]
             
-            basic_terms = [word for word in tokens 
-                          if word.isalnum() 
-                          and word.lower() not in self.stop_words
-                          and len(word) > 2]
+            # POS tagging
+            pos_tags = nltk.pos_tag(tokens)
             
-            try:
-                pos_tags = nltk.pos_tag(basic_terms)
-                key_terms = [word for word, pos in pos_tags 
-                            if (pos.startswith('NN') or pos.startswith('JJ')) 
-                            and word.lower() not in self.stop_words
-                            and word.isalnum()]
-                return list(set(key_terms))
-            except Exception as e:
-                print(f"POS tagging failed, using basic filtering: {e}")
-                return list(set(basic_terms))
-                
+            # Extract nouns and important adjectives
+            key_terms = [word for word, pos in pos_tags 
+                        if pos.startswith(('NN', 'JJ', 'VB'))]
+            
+            return list(set(key_terms))
         except Exception as e:
-            print(f"Error in extract_key_terms: {e}")
+            print(f"Error extracting key terms: {e}")
             return []
 
     def _extract_urls(self, text: str) -> List[str]:
@@ -134,14 +195,37 @@ class MisinformationDetector:
         return [word for word in words if word.startswith(('http://', 'https://'))]
 
     def calculate_risk_score(self, classification_scores: List[float], 
-                           fact_check_score: float, 
-                           sentiment_score: Dict) -> float:
+                            fact_check_score: float, 
+                            sentiment_score: Dict,
+                            model_prediction: Dict) -> float:
+        """
+        Calculate risk score incorporating model prediction
+        """
+        # Get model-based risk (inverse of True probability)
+        model_risk = 0.0
+        if model_prediction and 'probabilities' in model_prediction:
+            model_risk = 1.0 - model_prediction['probabilities'].get('True', 0.0)
+        
+        # Get misleading score from zero-shot classification
         misleading_score = classification_scores[2] if len(classification_scores) > 2 else 0
+        
+        # Get sentiment factor
         sentiment_factor = 0.2 if sentiment_score['label'] == 'NEGATIVE' else 0
         
-        risk_score = (misleading_score * 0.5 + 
-                     (1 - fact_check_score) * 0.3 + 
-                     sentiment_factor)
+        # Calculate weighted risk score
+        weights = {
+            'model': 0.4,        # Higher weight for trained model
+            'misleading': 0.2,   # Zero-shot classification
+            'fact_check': 0.3,   # Fact checking
+            'sentiment': 0.1     # Sentiment analysis
+        }
+        
+        risk_score = (
+            (model_risk * weights['model']) +
+            (misleading_score * weights['misleading']) +
+            ((1 - fact_check_score) * weights['fact_check']) +
+            (sentiment_factor * weights['sentiment'])
+        )
         
         return min(risk_score, 1.0)
     
@@ -178,145 +262,210 @@ class MisinformationDetector:
                 
             except Exception as e:
                 print(f"Error updating knowledge graph: {e}")
-            
+                
     def analyze_text(self, text: str) -> List[Dict]:
         """
-        Analyze text with integrated knowledge graph support
+        Analyze text with integrated model predictions and knowledge graph support
         """
-        sentences = self.preprocess_text(text)
-        results = []
-        
-        for sentence in sentences:
-            try:
-                # Existing classification
-                classification = self.classifier(
-                    sentence,
-                    candidate_labels=[
-                        "factual statement", 
-                        "opinion", 
-                        "misleading information"
-                    ]
-                )
-                
-                # Existing analysis components
-                sentiment = self.sentiment_analyzer(sentence)[0]
-                fact_check_results = self.fact_checker.check_claim(sentence)
-                urls = self._extract_urls(sentence)
-                source_checks = [self.source_checker.check_source(url) for url in urls]
-                
-                risk_score = self.calculate_risk_score(
-                    classification['scores'],
-                    fact_check_results['credibility_score'],
-                    sentiment
-                )
-                
-                key_terms = self.extract_key_terms(sentence)
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                
-                # Construct result dictionary
-                result = {
-                    'sentence': sentence,
-                    'classifications': classification['labels'],
-                    'classification_scores': classification['scores'],
-                    'sentiment': sentiment,
-                    'fact_check_results': fact_check_results,
-                    'source_checks': source_checks,
-                    'urls': urls,
-                    'risk_score': risk_score,
-                    'key_terms': key_terms,
-                    'timestamp': timestamp
-                }
-                
-                # Add to knowledge graph
-                try:
-                    knowledge_graph_content = {
-                        'text': sentence,
-                        'timestamp': timestamp,
-                        'credibility_score': fact_check_results['credibility_score'],
-                        'verified': False,
-                        'classification': classification,
-                        'sentiment': sentiment['label'],
-                        'key_terms': key_terms,
-                        'risk_score': risk_score
-                    }
-                    
-                    # Add sources if available
-                    if urls and source_checks:
-                        knowledge_graph_content['sources'] = [
-                            {
-                                'url': url,
-                                'check_result': check
-                            } for url, check in zip(urls, source_checks)
-                        ]
-                    
-                    # Add to knowledge graph
-                    self.knowledge_graph.add_content(knowledge_graph_content)
-                    
-                    # Get context from knowledge graph
-                    graph_context = self.knowledge_graph.get_claim_context(
-                        f"claim_{timestamp.replace(' ', '_').replace(':', '')}"
-                    )
-                    
-                    # Add graph context to result
-                    result['knowledge_graph_context'] = {
-                        'related_claims': graph_context['related_claims'],
-                        'related_entities': graph_context['entities'],
-                        'sources': graph_context['sources']
-                    }
-                    
-                except Exception as e:
-                    print(f"Knowledge graph integration error: {e}")
-                    result['knowledge_graph_context'] = {
-                        'error': str(e),
-                        'related_claims': [],
-                        'related_entities': [],
-                        'sources': []
-                    }
-                
-                # Check for alerts
-                alerts = self.alert_system.check_content(result)
-                if alerts:
-                    for alert in alerts:
-                        st.warning(f"⚠️ Alert: {alert.message}")
-                        
-                        try:
-                            # Enhanced alert data with knowledge graph context
-                            alert_data = {
-                                'message': alert.message,
-                                'risk_score': alert.risk_score,
-                                'timestamp': alert.timestamp,
-                                'source_text': alert.source_text,
-                                'severity': alert.severity,
-                                'type': alert.type,
-                                'related_claims': result['knowledge_graph_context']['related_claims'],
-                                'related_entities': result['knowledge_graph_context']['related_entities']
-                            }
-                            self.integration_layer.send_alerts_sync(alert_data)
-                        except Exception as e:
-                            st.error(f"Failed to send alert: {str(e)}")
-                
-                results.append(result)
-                
-            except Exception as e:
-                print(f"Error analyzing sentence: {e}")
-                # Add error result
-                results.append({
-                    'sentence': sentence,
-                    'error': str(e),
-                    'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                })
-        
-        # After processing all sentences, analyze patterns
         try:
+            # Input validation
+            if not text or not isinstance(text, str):
+                raise ValueError("Invalid input text")
+    
+            # Preprocess text into sentences
+            sentences = self.preprocess_text(text)
+            if not sentences:
+                raise ValueError("No valid sentences found in text")
+    
+            results = []
+            
+            for sentence in sentences:
+                try:
+                    # Initialize result dictionary with basic info
+                    result = {
+                        'sentence': sentence,
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'analysis_status': 'processing'
+                    }
+    
+                    # 1. Model Prediction
+                    try:
+                        model_prediction = self.predict_misinformation(sentence)
+                        result['model_prediction'] = model_prediction
+                    except Exception as e:
+                        print(f"Model prediction failed: {e}")
+                        result['model_prediction'] = None
+    
+                    # 2. Zero-shot Classification
+                    try:
+                        classification = self.classifier(
+                            sentence,
+                            candidate_labels=[
+                                "factual statement", 
+                                "opinion", 
+                                "misleading information"
+                            ]
+                        )
+                        result['classifications'] = classification['labels']
+                        result['classification_scores'] = classification['scores']
+                    except Exception as e:
+                        print(f"Classification failed: {e}")
+                        result['classifications'] = []
+                        result['classification_scores'] = []
+    
+                    # 3. Sentiment Analysis
+                    try:
+                        sentiment = self.sentiment_analyzer(sentence)[0]
+                        result['sentiment'] = sentiment
+                    except Exception as e:
+                        print(f"Sentiment analysis failed: {e}")
+                        result['sentiment'] = {'label': 'UNKNOWN', 'score': 0.0}
+    
+                    # 4. Fact Checking
+                    try:
+                        fact_check_results = self.fact_checker.check_claim(sentence)
+                        result['fact_check_results'] = fact_check_results
+                    except Exception as e:
+                        print(f"Fact checking failed: {e}")
+                        result['fact_check_results'] = {
+                            'credibility_score': 0.5,
+                            'credibility_analysis': {'components': {}, 'flags': []}
+                        }
+    
+                    # 5. Source Analysis
+                    try:
+                        urls = self._extract_urls(sentence)
+                        source_checks = [self.source_checker.check_source(url) for url in urls]
+                        result['urls'] = urls
+                        result['source_checks'] = source_checks
+                    except Exception as e:
+                        print(f"Source checking failed: {e}")
+                        result['urls'] = []
+                        result['source_checks'] = []
+    
+                    # 6. Key Terms Extraction
+                    try:
+                        key_terms = self.extract_key_terms(sentence)
+                        result['key_terms'] = key_terms
+                    except Exception as e:
+                        print(f"Key terms extraction failed: {e}")
+                        result['key_terms'] = []
+    
+                    # 7. Risk Score Calculation
+                    try:
+                        risk_score = self.calculate_risk_score(
+                            result.get('classification_scores', [0, 0, 0]),
+                            result['fact_check_results']['credibility_score'],
+                            result['sentiment'],
+                            result.get('model_prediction')
+                        )
+                        result['risk_score'] = risk_score
+                    except Exception as e:
+                        print(f"Risk score calculation failed: {e}")
+                        result['risk_score'] = 0.5
+    
+                    # 8. Knowledge Graph Integration
+                    try:
+                        knowledge_graph_content = {
+                            'text': sentence,
+                            'timestamp': result['timestamp'],
+                            'credibility_score': result['fact_check_results']['credibility_score'],
+                            'verified': False,
+                            'classification': classification if 'classifications' in result else None,
+                            'sentiment': result['sentiment']['label'],
+                            'key_terms': result['key_terms'],
+                            'risk_score': result['risk_score'],
+                            'model_prediction': result.get('model_prediction')
+                        }
+    
+                        if result['urls'] and result['source_checks']:
+                            knowledge_graph_content['sources'] = [
+                                {'url': url, 'check_result': check} 
+                                for url, check in zip(result['urls'], result['source_checks'])
+                            ]
+    
+                        self.knowledge_graph.add_content(knowledge_graph_content)
+    
+                        graph_context = self.knowledge_graph.get_claim_context(
+                            f"claim_{result['timestamp'].replace(' ', '_').replace(':', '')}"
+                        )
+    
+                        result['knowledge_graph_context'] = {
+                            'related_claims': graph_context.get('related_claims', []),
+                            'related_entities': graph_context.get('entities', []),
+                            'sources': graph_context.get('sources', [])
+                        }
+    
+                    except Exception as e:
+                        print(f"Knowledge graph integration error: {e}")
+                        result['knowledge_graph_context'] = {
+                            'error': str(e),
+                            'related_claims': [],
+                            'related_entities': [],
+                            'sources': []
+                        }
+    
+                    # 9. Alert System Integration
+                    try:
+                        alerts = self.alert_system.check_content(result)
+                        if alerts:
+                            result['alerts'] = []
+                            for alert in alerts:
+                                alert_data = {
+                                    'message': alert.message,
+                                    'risk_score': alert.risk_score,
+                                    'timestamp': alert.timestamp,
+                                    'source_text': alert.source_text,
+                                    'severity': alert.severity,
+                                    'type': alert.type,
+                                    'model_prediction': result.get('model_prediction'),
+                                    'related_claims': result['knowledge_graph_context']['related_claims'],
+                                    'related_entities': result['knowledge_graph_context']['related_entities']
+                                }
+                                result['alerts'].append(alert_data)
+                                
+                                try:
+                                    self.integration_layer.send_alerts_sync(alert_data)
+                                    st.warning(f"⚠️ Alert: {alert.message}")
+                                except Exception as e:
+                                    st.error(f"Failed to send alert: {str(e)}")
+    
+                    except Exception as e:
+                        print(f"Alert system error: {e}")
+                        result['alerts'] = []
+    
+                    # Mark analysis as complete
+                    result['analysis_status'] = 'complete'
+                    results.append(result)
+    
+                except Exception as e:
+                    print(f"Error analyzing sentence: {e}")
+                    results.append({
+                        'sentence': sentence,
+                        'error': str(e),
+                        'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        'analysis_status': 'failed'
+                    })
+    
+            # 10. Pattern Analysis
             if results:
-                patterns = self.knowledge_graph.analyze_claim_patterns()
-                # Add pattern analysis to the last result
-                results[-1]['pattern_analysis'] = patterns
+                try:
+                    patterns = self.knowledge_graph.analyze_claim_patterns()
+                    results[-1]['pattern_analysis'] = patterns
+                except Exception as e:
+                    print(f"Pattern analysis error: {e}")
+                    results[-1]['pattern_analysis'] = {'error': str(e)}
+    
+            return results
+    
         except Exception as e:
-            print(f"Error analyzing patterns: {e}")
-        
-        return results
-
+            print(f"Fatal error in analyze_text: {e}")
+            return [{
+                'error': f"Fatal error: {str(e)}",
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'analysis_status': 'failed'
+            }]
+    
 def create_analysis_charts(results: List[Dict]):
     df = pd.DataFrame(results)
     fig_timeline = px.line(
@@ -341,6 +490,56 @@ def create_analysis_charts(results: List[Dict]):
     
     return fig_timeline, fig_dist
 
+def model_training_tab():
+    st.title("🤖 Model Training")
+    
+    # Initialize trainer if not in session state
+    if 'model_trainer' not in st.session_state:
+        st.session_state.model_trainer = ModelTrainer()
+    
+    # Dataset loading section
+    st.header("Dataset")
+    df = st.session_state.model_trainer.load_and_preprocess_data('datasets\\factdata.csv')
+    
+    if df is not None:
+        st.write("Dataset Preview:")
+        st.dataframe(df.head())
+        
+        # Dataset statistics
+        st.subheader("Dataset Statistics")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write("Class Distribution:")
+            class_dist = df['Fact Check'].value_counts()
+            st.bar_chart(class_dist)
+        with col2:
+            st.write("Dataset Size:")
+            st.metric("Total Samples", len(df))
+            st.metric("Features", df.shape[1])
+        
+        # Training parameters
+        st.subheader("Training Parameters")
+        test_size = st.slider(
+            "Test Set Size",
+            min_value=0.1,
+            max_value=0.4,
+            value=0.2,
+            step=0.05
+        )
+        
+        # Train model button
+        if st.button("Train Model"):
+            with st.spinner("Training model... This may take a few minutes."):
+                metrics = st.session_state.model_trainer.train_model(df, test_size)
+                
+                if metrics:
+                    st.success("Model training completed!")
+                    st.session_state.model_trainer.visualize_metrics()
+                    
+                    # Save model
+                    st.session_state.model_trainer.save_model("models\\misinformation_detector.joblib")
+                    st.success("Model saved successfully!")
+                    
 def integration_settings_tab():
     st.title("🔌 Integration Settings")
     
@@ -686,61 +885,228 @@ async def process_live_feed(processor, placeholder, results):
             display_live_results(results)
 
 def text_analysis_tab():
+    """
+    Display and handle the text analysis interface
+    """
     st.title("🔍 Real-time Misinformation Detector")
     
+    # Input Section
     st.header("Input Text")
     text_input = st.text_area(
         "Enter text to analyze:",
-        height=150
+        height=150,
+        help="Enter the text you want to analyze for potential misinformation"
     )
     
-    if st.button("Analyze Text"):
-        if text_input:
-            with st.spinner("Analyzing text..."):
+    # Analysis Controls
+    col1, col2 = st.columns([4, 1])
+    with col1:
+        analyze_button = st.button("🔍 Analyze Text", use_container_width=True)
+    with col2:
+        clear_button = st.button("🗑️ Clear Results", use_container_width=True)
+    
+    # Clear results if requested
+    if clear_button:
+        if 'monitoring_results' in st.session_state:
+            st.session_state.monitoring_results = []
+        st.experimental_rerun()
+    
+    # Main Analysis Logic
+    if analyze_button:
+        if not text_input:
+            st.warning("⚠️ Please enter some text to analyze")
+            return
+            
+        with st.spinner("🔄 Analyzing text..."):
+            try:
+                # Perform analysis
                 results = st.session_state.detector.analyze_text(text_input)
-     
-                # Store results in session state
+                
+                # Update monitoring results
                 if 'monitoring_results' not in st.session_state:
                     st.session_state.monitoring_results = []
                 st.session_state.monitoring_results.extend(results)
-                           
-                st.header("Analysis Results")
                 
-                for result in results:
+                # Display Results Header
+                st.header("📊 Analysis Results")
+                
+                # Process each result
+                for idx, result in enumerate(results, 1):
                     with st.container():
+                        # Handle analysis errors
+                        if 'error' in result:
+                            st.error(f"⚠️ Error analyzing text: {result['error']}")
+                            continue
+                        
+                        # Status indicator
+                        status = result.get('analysis_status', 'complete')
+                        status_emoji = "🟢" if status == 'complete' else "🟡"
+                        st.subheader(f"{status_emoji} Result {idx}")
+                        
+                        # Main content columns
                         col1, col2 = st.columns([3, 1])
                         
                         with col1:
-                            st.markdown(f"**Sentence:** {result['sentence']}")
-                            st.markdown("**Classifications:**")
-                            for cls, score in zip(result['classifications'], 
-                                                result['classification_scores']):
-                                st.markdown(f"- {cls}: {score:.2%}")
+                            # Original text
+                            st.markdown("**📝 Analyzed Text:**")
+                            st.info(result['sentence'])
                             
-                            st.markdown(f"**Key Terms:** {', '.join(result['key_terms'])}")
-                            st.markdown(f"**Sentiment:** {result['sentiment']['label']} "
-                                      f"({result['sentiment']['score']:.2%})")
+                            # Model Prediction
+                            if result.get('model_prediction'):
+                                with st.expander("🤖 Model Prediction", expanded=True):
+                                    pred = result['model_prediction']
+                                    st.markdown(f"**Label:** {pred['label']}")
+                                    st.markdown("**Probabilities:**")
+                                    for label, prob in pred['probabilities'].items():
+                                        col1, col2 = st.columns([3, 1])
+                                        with col1:
+                                            st.progress(prob)
+                                        with col2:
+                                            st.markdown(f"{label}: {prob:.2%}")
                             
-                            st.markdown("**Fact Check Results:**")
-                            st.json(result['fact_check_results'])
+                            # Classifications
+                            with st.expander("🏷️ Classifications", expanded=True):
+                                for cls, score in zip(result.get('classifications', []), 
+                                                    result.get('classification_scores', [])):
+                                    col1, col2 = st.columns([3, 1])
+                                    with col1:
+                                        st.progress(score)
+                                    with col2:
+                                        st.markdown(f"{cls}: {score:.2%}")
                             
-                            if result['urls']:
-                                st.markdown("**Source Check Results:**")
-                                for url, check in zip(result['urls'], result['source_checks']):
-                                    st.markdown(f"URL: {url}")
-                                    st.json(check)
+                            # Key Terms
+                            if result.get('key_terms'):
+                                st.markdown("**🔑 Key Terms:**")
+                                st.markdown(", ".join([f"`{term}`" for term in result['key_terms']]))
+                            
+                            # Sentiment
+                            if result.get('sentiment'):
+                                sentiment_emoji = "😊" if result['sentiment']['label'] == 'POSITIVE' else "☹️"
+                                st.markdown(f"**{sentiment_emoji} Sentiment:** {result['sentiment']['label']} "
+                                          f"({result['sentiment']['score']:.2%})")
+                            
+                            # Fact Check Results
+                            with st.expander("✔️ Fact Check Results", expanded=False):
+                                st.json(result['fact_check_results'])
+                            
+                            # Source Check Results
+                            if result.get('urls'):
+                                with st.expander("🔗 Source Check Results", expanded=False):
+                                    for url, check in zip(result['urls'], result['source_checks']):
+                                        st.markdown(f"**URL:** {url}")
+                                        st.json(check)
                         
                         with col2:
-                            st.metric("Risk Score", f"{result['risk_score']:.2%}")
-                            st.metric("Fact-Check Score", 
-                                    f"{result['fact_check_results']['credibility_score']:.2%}")
+                            # Risk Score with enhanced visualization
+                            risk_score = result['risk_score']
+                            
+                            # Adjust risk score based on misleading classification score
+                            misleading_score = result['classification_scores'][0] if 'misleading information' in result['classifications'] else 0
+                            
+                            # Calculate adjusted risk score
+                            adjusted_risk = max(risk_score, misleading_score)
+                            
+                            if adjusted_risk > 0.7:
+                                risk_delta = "⚠️ High Risk"
+                                risk_color = "inverse"
+                            elif adjusted_risk > 0.4:
+                                risk_delta = "⚡ Medium Risk"
+                                risk_color = "normal"
+                            else:
+                                risk_delta = "✅ Low Risk"
+                                risk_color = "normal"
+                                
+                            st.metric(
+                                "⚠️ Risk Score", 
+                                f"{adjusted_risk:.2%}",
+                                delta=risk_delta,
+                                delta_color=risk_color
+                            )
+                            
+                            # Fact-Check Score with credibility indicator
+                            credibility_score = result['fact_check_results']['credibility_score']
+                            
+                            # Adjust credibility based on misleading score
+                            adjusted_credibility = credibility_score * (1 - misleading_score)
+                            
+                            if adjusted_credibility < 0.3:
+                                credibility_delta = "⚠️ Low Credibility"
+                                cred_color = "inverse"
+                            elif adjusted_credibility < 0.7:
+                                credibility_delta = "⚡ Medium Credibility"
+                                cred_color = "normal"
+                            else:
+                                credibility_delta = "✅ High Credibility"
+                                cred_color = "normal"
+                                
+                            st.metric(
+                                "✔️ Credibility", 
+                                f"{adjusted_credibility:.2%}",
+                                delta=credibility_delta,
+                                delta_color=cred_color
+                            )
+                            
+                            # Model Confidence if available
+                            if result.get('model_prediction'):
+                                confidence = result['model_prediction'].get('confidence', 0)
+                                conf_delta = None
+                                if confidence > 0.8:
+                                    conf_delta = "✅ High Confidence"
+                                    conf_color = "normal"
+                                elif confidence > 0.5:
+                                    conf_delta = "⚡ Medium Confidence"
+                                    conf_color = "normal"
+                                else:
+                                    conf_delta = "⚠️ Low Confidence"
+                                    conf_color = "inverse"
+                                    
+                                st.metric(
+                                    "🎯 Model Confidence", 
+                                    f"{confidence:.2%}",
+                                    delta=conf_delta,
+                                    delta_color=conf_color
+                                )
                         
-                        if result['risk_score'] > 0.7:
-                            st.warning("⚠️ High risk of misinformation!")
+                            # Visual Risk Indicator based on adjusted risk
+                            if adjusted_risk > 0.7:
+                                st.error("🚨 High Risk of Misinformation!")
+                            elif adjusted_risk > 0.4:
+                                st.warning("⚠️ Medium Risk Content")
+                            else:
+                                st.success("✅ Low Risk Content")
+                        
+                        # Alerts and Warnings
+                        if result.get('alerts'):
+                            for alert in result['alerts']:
+                                severity_emoji = "🔴" if alert['severity'] == 'high' else "🟡"
+                                st.warning(f"{severity_emoji} {alert['message']}")
+                        
+                        # Add credibility analysis summary
+                        if 'misleading information' in result['classifications']:
+                            misleading_idx = result['classifications'].index('misleading information')
+                            misleading_score = result['classification_scores'][misleading_idx]
+                            if misleading_score > 0.7:
+                                st.error(f"🚨 Highly misleading content detected (Score: {misleading_score:.2%})")
+                            elif misleading_score > 0.4:
+                                st.warning(f"⚠️ Potentially misleading content (Score: {misleading_score:.2%})")
+                        
+                        # Add credibility flags
+                        st.warning("⚠️ Credibility Flags:")
+                        if result['fact_check_results'].get('credibility_analysis', {}).get('flags'):
+                            for flag in result['fact_check_results']['credibility_analysis']['flags']:
+                                st.markdown(f"- {flag}")
+                        else:
+                            st.markdown("- No specific flags detected")
                         
                         st.divider()
+                # Display Live Monitoring Results
+                if st.session_state.monitoring_results:
+                    with st.expander("📈 Live Monitoring Dashboard", expanded=False):
+                        display_live_results(st.session_state.monitoring_results)
                 
-                display_live_results(results)
+            except Exception as e:
+                st.error(f"❌ Analysis failed: {str(e)}")
+                st.error("Please try again or contact support if the problem persists.")
 
 async def start_monitoring(source_type, settings, monitoring_speed):
     """Start monitoring based on source type"""
@@ -1783,6 +2149,10 @@ def main():
     # Must be the first Streamlit command
     st.set_page_config(page_title="Real-time Misinformation Detector", layout="wide")
     
+    # Initialize session state first
+    if 'current_page' not in st.session_state:
+        st.session_state.current_page = "text_analysis"
+    
     # Then add custom CSS
     st.markdown("""
         <style>
@@ -1876,7 +2246,7 @@ def main():
         "📊 Dashboard": "dashboard",
         "🚨 Alerts": "alerts",
         "🕸️ Knowledge Graph": "knowledge_graph",
-        "🔌 Integrations": "integrations"
+        "🔌 Integrations": "integrations",
     }
 
     # Store the current page in session state if not present
@@ -1969,7 +2339,7 @@ def main():
         knowledge_graph_tab()
     elif st.session_state.current_page == "integrations":
         integration_settings_tab()
-    
+        
     # Enhanced About Section
     st.sidebar.markdown("---")
     st.sidebar.markdown("""
