@@ -1,6 +1,3 @@
-I'll help you create a comprehensive README.md that documents your project in detail. Here's the updated version:
-
-```markdown
 # TrueTell - Real-time Misinformation Detection System
 
 ## 🌟 Overview
