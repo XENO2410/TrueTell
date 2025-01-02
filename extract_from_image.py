@@ -1,3 +1,5 @@
+# extract_from_image.py
+
 import os
 import pytesseract
 from PIL import Image
