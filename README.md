@@ -232,11 +232,25 @@ TrueTell/
 - Feature importance
 
 ## 🤝 Contributing
-1. Fork the repository
-2. Create a feature branch
-3. Commit your changes
-4. Push to the branch
-5. Create a Pull Request
+We welcome contributions to **TruthTell**! Follow these steps to contribute:
+
+1. **Fork the repository**:
+    ```bash
+    git clone https://github.com/your-username/truthtell.git
+    ```
+2. **Create a feature branch**:
+    ```bash
+    git checkout -b feature-name
+    ```
+3. **Commit your changes**:
+    ```bash
+    git commit -m "Add some feature"
+    ```
+4. **Push to the branch**:
+    ```bash
+    git push origin feature-name
+    ```
+5. **Open a Pull Request**: Go to the original repository and open a pull request.
 
 ## 📝 License
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
