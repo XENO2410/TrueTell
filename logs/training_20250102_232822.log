@@ -1,0 +1,67 @@
+2025-01-02 23:28:22,202 - __main__ - INFO - Starting model training process...
+2025-01-02 23:28:22,203 - __main__ - INFO - Initializing model trainer...
+2025-01-02 23:28:22,203 - __main__ - INFO - Loading and preprocessing dataset...
+2025-01-02 23:28:22,211 - model_trainer - INFO - Loaded dataset with 959 samples
+2025-01-02 23:28:22,211 - __main__ - INFO - Dataset loaded successfully with 959 samples
+2025-01-02 23:28:22,212 - __main__ - INFO - Class distribution:
+Fact Check
+0    908
+1     49
+2      2
+Name: count, dtype: int64
+2025-01-02 23:28:22,402 - matplotlib.category - INFO - Using categorical units to plot a list of strings that are all parsable as floats or dates. If these strings should be plotted as numbers, cast to the appropriate data type before plotting.
+2025-01-02 23:28:22,408 - matplotlib.category - INFO - Using categorical units to plot a list of strings that are all parsable as floats or dates. If these strings should be plotted as numbers, cast to the appropriate data type before plotting.
+2025-01-02 23:28:22,495 - __main__ - INFO - Training model...
+2025-01-02 23:28:22,501 - model_trainer - INFO - Starting GridSearchCV...
+2025-01-02 23:28:33,690 - model_trainer - INFO - Best parameters: {'classifier__max_depth': 20, 'classifier__min_samples_split': 5, 'classifier__n_estimators': 100, 'vectorizer__max_features': 3000, 'vectorizer__ngram_range': (1, 2)}
+2025-01-02 23:28:33,691 - __main__ - INFO - Saving model...
+2025-01-02 23:28:33,754 - model_trainer - INFO - Model saved successfully to models/misinformation_detector.joblib
+2025-01-02 23:28:33,754 - __main__ - INFO - Exporting metrics...
+2025-01-02 23:28:33,755 - model_trainer - ERROR - Error exporting metrics: 'train_accuracy'
+2025-01-02 23:28:33,755 - __main__ - INFO - 
+Detailed Performance Metrics:
+2025-01-02 23:28:33,755 - __main__ - INFO - --------------------------------------------------
+2025-01-02 23:28:33,755 - __main__ - INFO - Best Model Score: 0.5639
+2025-01-02 23:28:33,756 - __main__ - INFO - Feature Count: 1833
+2025-01-02 23:28:33,756 - __main__ - INFO - 
+Best Parameters:
+2025-01-02 23:28:33,756 - __main__ - INFO - classifier__max_depth: 20
+2025-01-02 23:28:33,756 - __main__ - INFO - classifier__min_samples_split: 5
+2025-01-02 23:28:33,757 - __main__ - INFO - classifier__n_estimators: 100
+2025-01-02 23:28:33,758 - __main__ - INFO - vectorizer__max_features: 3000
+2025-01-02 23:28:33,758 - __main__ - INFO - vectorizer__ngram_range: (1, 2)
+2025-01-02 23:28:33,758 - __main__ - INFO - 
+Basic Metrics:
+2025-01-02 23:28:33,758 - __main__ - INFO - Training accuracy: 99.48%
+2025-01-02 23:28:33,759 - __main__ - INFO - Test accuracy: 95.31%
+2025-01-02 23:28:33,759 - __main__ - INFO - Cross-validation mean: 56.39%
+2025-01-02 23:28:33,759 - __main__ - INFO - Cross-validation std: 15.63%
+2025-01-02 23:28:33,759 - __main__ - INFO - 
+Classification Report:
+2025-01-02 23:28:33,759 - __main__ - INFO - 
+Class 0:
+2025-01-02 23:28:33,759 - __main__ - INFO - Precision: 0.9529
+2025-01-02 23:28:33,759 - __main__ - INFO - Recall: 1.0000
+2025-01-02 23:28:33,759 - __main__ - INFO - F1-score: 0.9759
+2025-01-02 23:28:33,760 - __main__ - INFO - 
+Class 1:
+2025-01-02 23:28:33,760 - __main__ - INFO - Precision: 1.0000
+2025-01-02 23:28:33,760 - __main__ - INFO - Recall: 0.1000
+2025-01-02 23:28:33,760 - __main__ - INFO - F1-score: 0.1818
+2025-01-02 23:28:33,760 - __main__ - INFO - 
+Class macro avg:
+2025-01-02 23:28:33,760 - __main__ - INFO - Precision: 0.9764
+2025-01-02 23:28:33,760 - __main__ - INFO - Recall: 0.5500
+2025-01-02 23:28:33,760 - __main__ - INFO - F1-score: 0.5788
+2025-01-02 23:28:33,761 - __main__ - INFO - 
+Class weighted avg:
+2025-01-02 23:28:33,761 - __main__ - INFO - Precision: 0.9553
+2025-01-02 23:28:33,761 - __main__ - INFO - Recall: 0.9531
+2025-01-02 23:28:33,761 - __main__ - INFO - F1-score: 0.9345
+2025-01-02 23:28:33,761 - __main__ - INFO - 
+Confusion Matrix:
+2025-01-02 23:28:33,761 - __main__ - INFO - [[182   0]
+ [  9   1]]
+2025-01-02 23:28:33,761 - __main__ - INFO - 
+Model training completed successfully!
+2025-01-02 23:28:33,762 - __main__ - INFO - Training process completed successfully!
