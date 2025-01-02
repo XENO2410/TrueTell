@@ -67,7 +67,7 @@ TrueTell is an advanced AI-powered real-time misinformation detection system dev
 - Google Fact Check API
 - News API
 - Twitter API
-- Guardian API
+- Reddit API
 
 ## 📊 Dataset
 
@@ -239,4 +239,4 @@ TrueTell/
 5. Create a Pull Request
 
 ## 📝 License
-This project is licensed under the MIT License - see the LICENSE file for details.
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
