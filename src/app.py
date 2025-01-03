@@ -1,5 +1,13 @@
 # src/app.py
 import streamlit as st
+
+st.set_page_config(
+    page_title="TrueTell",
+    page_icon="🔍",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+    
 import nltk
 from nltk.tokenize import sent_tokenize, word_tokenize
 from nltk.corpus import stopwords
@@ -1904,13 +1912,7 @@ def load_transformers_models():
 
 def main():
     # Must be the first Streamlit command
-    st.set_page_config(
-        page_title="TrueTell",
-        page_icon="🔍",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
+
     # Load models at startup
     if 'models_loaded' not in st.session_state:
         with st.spinner("Loading models..."):
