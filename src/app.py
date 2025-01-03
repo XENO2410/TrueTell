@@ -1,6 +1,10 @@
 # src/app.py
 import streamlit as st
 
+def health_check():
+    """Basic health check endpoint"""
+    return {"status": "healthy"}
+
 st.set_page_config(
     page_title="TrueTell",
     page_icon="🔍",
@@ -2149,22 +2153,23 @@ def main():
         
 if __name__ == "__main__":
     try:
+        # Add basic health check endpoint
+        if "health-check" in st.experimental_get_query_params():
+            st.json(health_check())
+            st.stop()
+            
         # Check if running in Streamlit Cloud
         is_cloud = os.getenv('STREAMLIT_CLOUD', '') == 'true'
         
         # Load secrets with fallback to environment variables
         if not is_cloud:
-            # Local development - load from .env file
             load_dotenv()
         
         # Initialize API keys
         API_KEYS = load_api_keys()
         
-        # Check health or run main
-        if st.query_params.get("health") == ["check"]:
-            st.write(check_health())
-        else:
-            main()
+        # Run main application
+        main()
             
     except Exception as e:
         st.error(f"Application Error: {str(e)}")
