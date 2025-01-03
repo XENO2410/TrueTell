@@ -44,6 +44,9 @@ TWITTER_BEARER_TOKEN = st.secrets["twitter"]["TWITTER_BEARER_TOKEN"]
 SLACK_TOKEN = st.secrets["slack"]["SLACK_TOKEN"]
 WEBHOOK_URL = st.secrets["slack"]["WEBHOOK_URL"]
 
+def check_health():
+    return True
+
 class MisinformationDetector:
     def __init__(self):
         # Initialize NLTK components with error handling
@@ -2001,4 +2004,12 @@ def main():
         """, unsafe_allow_html=True)
         
 if __name__ == "__main__":
-    main()
+    st.set_page_config(
+        page_title="TrueTell",
+        page_icon="🔍",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    if st.experimental_get_query_params().get("health") == ["check"]:
+        st.write(check_health())

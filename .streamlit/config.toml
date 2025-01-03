@@ -6,19 +6,31 @@ textColor = "#FAFAFA"
 font = "sans serif"
 
 [server]
-enableCORS = false
-enableXsrfProtection = false
+enableCORS = true
+enableXsrfProtection = true
 maxUploadSize = 200
+port = 8501
+address = "0.0.0.0"
+maxMessageSize = 200
+enableWebsocketCompression = false
+headless = true
 
 [browser]
 serverAddress = "0.0.0.0"
 serverPort = 8501
+gatherUsageStats = false
 
 [runner]
 fastReruns = true
+magicEnabled = true
 
 [client]
 showErrorDetails = false
+toolbarMode = "minimal"
 
 [logger]
 level = "info"
+messageFormat = "%(asctime)s %(message)s"
+
+[global]
+developmentMode = false
