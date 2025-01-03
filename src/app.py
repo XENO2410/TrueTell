@@ -39,22 +39,59 @@ import plotly.graph_objects as go
 load_dotenv()
 download_nltk_data()
 
-# Error handling for transformers import
-try:
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-except ImportError:
-    st.error("🚨 Error loading transformers library. Attempting to reinstall...")
-    import subprocess
-    subprocess.run(["pip", "install", "--force-reinstall", "transformers==4.36.0", "torch==2.5.1"])
-    from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
-    
-NEWS_API_KEY = st.secrets["general"]["NEWS_API_KEY"]
-TWITTER_BEARER_TOKEN = st.secrets["twitter"]["TWITTER_BEARER_TOKEN"]
-SLACK_TOKEN = st.secrets["slack"]["SLACK_TOKEN"]
-WEBHOOK_URL = st.secrets["slack"]["WEBHOOK_URL"]
+# Initialize transformers with error handling
+@st.cache_resource
+def load_transformers():
+    try:
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+        return pipeline
+    except ImportError:
+        st.error("🚨 Error loading transformers library. Attempting to reinstall...")
+        import subprocess
+        subprocess.run(["pip", "install", "--force-reinstall", "transformers==4.36.0", "torch==2.5.1"])
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+        return pipeline
+    except Exception as e:
+        st.error(f"Failed to load transformers: {str(e)}")
+        return None
+
+# Load API keys with fallbacks
+def load_api_keys():
+    try:
+        return {
+            "NEWS_API_KEY": st.secrets["general"]["NEWS_API_KEY"],
+            "TWITTER_BEARER_TOKEN": st.secrets["twitter"]["TWITTER_BEARER_TOKEN"],
+            "SLACK_TOKEN": st.secrets["slack"]["SLACK_TOKEN"],
+            "WEBHOOK_URL": st.secrets["slack"]["WEBHOOK_URL"]
+        }
+    except Exception as e:
+        st.warning("⚠️ Some API keys are missing. Using environment variables as fallback.")
+        return {
+            "NEWS_API_KEY": os.getenv("NEWS_API_KEY", ""),
+            "TWITTER_BEARER_TOKEN": os.getenv("TWITTER_BEARER_TOKEN", ""),
+            "SLACK_TOKEN": os.getenv("SLACK_TOKEN", ""),
+            "WEBHOOK_URL": os.getenv("WEBHOOK_URL", "")
+        }
+
+# Initialize global variables
+pipeline = load_transformers()
+API_KEYS = load_api_keys()
 
 def check_health():
-    return True
+    """Check if all critical components are working"""
+    try:
+        # Check transformers
+        if pipeline is None:
+            return False
+        
+        # Check API keys
+        if not any(API_KEYS.values()):
+            st.warning("⚠️ No API keys available. Some features will be limited.")
+        
+        return True
+    except Exception as e:
+        st.error(f"Health check failed: {str(e)}")
+        return False
 
 class MisinformationDetector:
     def __init__(self):
@@ -71,19 +108,22 @@ class MisinformationDetector:
             
         # Initialize transformers with error handling
         try:
-            # Load classification model
-            self.classifier = pipeline(
-                "zero-shot-classification",
-                model="facebook/bart-large-mnli",
-                device=-1  # Use CPU
-            )
-            
-            # Load sentiment model
-            self.sentiment_analyzer = pipeline(
-                "sentiment-analysis",
-                model="distilbert-base-uncased-finetuned-sst-2-english",
-                device=-1  # Use CPU
-            )
+            if pipeline:
+                # Load classification model
+                self.classifier = pipeline(
+                    "zero-shot-classification",
+                    model="facebook/bart-large-mnli",
+                    device=-1  # Use CPU
+                )
+                
+                # Load sentiment model
+                self.sentiment_analyzer = pipeline(
+                    "sentiment-analysis",
+                    model="distilbert-base-uncased-finetuned-sst-2-english",
+                    device=-1  # Use CPU
+                )
+            else:
+                raise ImportError("Transformers pipeline not available")
         except Exception as e:
             st.error(f"Error initializing transformers models: {str(e)}")
             # Provide fallback functionality
@@ -99,7 +139,7 @@ class MisinformationDetector:
         self.alert_system = AlertSystem()
         self.knowledge_graph = KnowledgeGraph()
         
-        # Initialize integration layer
+        # Initialize integration layer with API keys
         self.integration_layer = IntegrationLayer()
         self.setup_integrations()
     
@@ -1816,26 +1856,52 @@ def knowledge_graph_tab():
                 st.info("No entities found matching the criteria.")
         else:
             st.warning("Please select at least one entity type.")
-
+                              
 @st.cache_resource
 def load_transformers_models():
     """Load and cache transformer models"""
     try:
+        from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+        
+        # Load classification model
         classifier = pipeline(
             "zero-shot-classification",
             model="facebook/bart-large-mnli",
-            device=-1
+            device=-1  # Use CPU
         )
+        
+        # Load sentiment model
         sentiment_analyzer = pipeline(
             "sentiment-analysis",
             model="distilbert-base-uncased-finetuned-sst-2-english",
-            device=-1
+            device=-1  # Use CPU
         )
+        
         return classifier, sentiment_analyzer
+    except ImportError:
+        st.error("🚨 Error loading transformers library. Attempting to reinstall...")
+        import subprocess
+        subprocess.run(["pip", "install", "--force-reinstall", "transformers==4.36.0", "torch==2.5.1"])
+        try:
+            from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+            classifier = pipeline(
+                "zero-shot-classification",
+                model="facebook/bart-large-mnli",
+                device=-1
+            )
+            sentiment_analyzer = pipeline(
+                "sentiment-analysis",
+                model="distilbert-base-uncased-finetuned-sst-2-english",
+                device=-1
+            )
+            return classifier, sentiment_analyzer
+        except Exception as e:
+            st.error(f"Failed to load models after reinstall: {str(e)}")
+            return None, None
     except Exception as e:
         st.error(f"Error loading models: {str(e)}")
         return None, None
-                              
+
 def main():
     # Must be the first Streamlit command
     st.set_page_config(
@@ -1849,9 +1915,18 @@ def main():
     if 'models_loaded' not in st.session_state:
         with st.spinner("Loading models..."):
             classifier, sentiment_analyzer = load_transformers_models()
-            st.session_state.models_loaded = True
-            st.session_state.classifier = classifier
-            st.session_state.sentiment_analyzer = sentiment_analyzer
+            if classifier is not None and sentiment_analyzer is not None:
+                st.session_state.models_loaded = True
+                st.session_state.classifier = classifier
+                st.session_state.sentiment_analyzer = sentiment_analyzer
+            else:
+                st.error("Failed to load models. Using fallback functionality.")
+                st.session_state.models_loaded = False
+                st.session_state.classifier = lambda x, candidate_labels: {
+                    "labels": candidate_labels,
+                    "scores": [0.33, 0.33, 0.34]
+                }
+                st.session_state.sentiment_analyzer = lambda x: [{"label": "NEUTRAL", "score": 0.5}]
     
     # Then add custom CSS
     st.markdown("""
@@ -2066,12 +2141,25 @@ def main():
         """, unsafe_allow_html=True)
         
 if __name__ == "__main__":
-    st.set_page_config(
-        page_title="TrueTell",
-        page_icon="🔍",
-        layout="wide",
-        initial_sidebar_state="expanded"
-    )
-    
-    if st.experimental_get_query_params().get("health") == ["check"]:
-        st.write(check_health())
+    try:
+        # Check if running in Streamlit Cloud
+        is_cloud = os.getenv('STREAMLIT_CLOUD', '') == 'true'
+        
+        # Load secrets with fallback to environment variables
+        if not is_cloud:
+            # Local development - load from .env file
+            load_dotenv()
+        
+        # Initialize API keys
+        API_KEYS = load_api_keys()
+        
+        # Check health or run main
+        if st.query_params.get("health") == ["check"]:
+            st.write(check_health())
+        else:
+            main()
+            
+    except Exception as e:
+        st.error(f"Application Error: {str(e)}")
+        if os.getenv("DEBUG", "false").lower() == "true":
+            st.exception(e)
