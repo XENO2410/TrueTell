@@ -1,0 +1,8 @@
+timestamp,text,risk_score,credibility_score,risk_level,summary
+2025-01-03 12:13:51,URGENT: Studies show that eating chocolate every day makes you immune to all viruses.,0.2545803337550163,0.34755,Medium,Content requires additional verification
+2025-01-03 12:13:53,Big pharma is suppressing this information to sell more medicine.,0.4225998351842165,0.34475,Medium,Content requires additional verification
+2025-01-03 12:13:56,This is 100% proven fact!,0.19220287452917548,0.3645833333333333,Medium,Content requires additional verification
+2025-01-03 12:13:58,"ALERT: The Earth is actually flat, NASA has been lying for decades with fake images.",0.40173560514822604,0.34825,Medium,Content requires additional verification
+2025-01-03 12:14:02,"The moon landing was filmed in Hollywood, and aliens are controlling world leaders.",0.2295293749344349,0.34685,Medium,Content requires additional verification
+2025-01-03 12:14:04,Scientists who disagree are part of the global conspiracy.,0.4302026272153855,0.34405,Medium,Content requires additional verification
+2025-01-03 12:14:05,Do your own research!,0.25226028799176214,0.34055,Medium,Content requires additional verification

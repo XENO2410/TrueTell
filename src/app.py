@@ -39,6 +39,12 @@ import plotly.graph_objects as go
 load_dotenv()
 download_nltk_data()
 
+# Use environment variables with fallbacks
+NEWS_API_KEY = os.getenv('NEWS_API_KEY', '')
+TWITTER_BEARER_TOKEN = os.getenv('TWITTER_BEARER_TOKEN', '')
+SLACK_TOKEN = os.getenv('SLACK_TOKEN', '')
+WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')
+
 class MisinformationDetector:
     def __init__(self):
         # Initialize NLTK components with error handling
