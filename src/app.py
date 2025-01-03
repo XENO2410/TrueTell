@@ -39,11 +39,10 @@ import plotly.graph_objects as go
 load_dotenv()
 download_nltk_data()
 
-# Use environment variables with fallbacks
-NEWS_API_KEY = os.getenv('NEWS_API_KEY', '')
-TWITTER_BEARER_TOKEN = os.getenv('TWITTER_BEARER_TOKEN', '')
-SLACK_TOKEN = os.getenv('SLACK_TOKEN', '')
-WEBHOOK_URL = os.getenv('WEBHOOK_URL', '')
+NEWS_API_KEY = st.secrets["general"]["NEWS_API_KEY"]
+TWITTER_BEARER_TOKEN = st.secrets["twitter"]["TWITTER_BEARER_TOKEN"]
+SLACK_TOKEN = st.secrets["slack"]["SLACK_TOKEN"]
+WEBHOOK_URL = st.secrets["slack"]["WEBHOOK_URL"]
 
 class MisinformationDetector:
     def __init__(self):

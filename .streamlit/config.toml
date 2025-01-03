@@ -8,7 +8,17 @@ font = "sans serif"
 [server]
 enableCORS = false
 enableXsrfProtection = false
+maxUploadSize = 200
 
 [browser]
 serverAddress = "0.0.0.0"
 serverPort = 8501
+
+[runner]
+fastReruns = true
+
+[client]
+showErrorDetails = false
+
+[logger]
+level = "info"
