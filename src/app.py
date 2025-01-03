@@ -39,6 +39,15 @@ import plotly.graph_objects as go
 load_dotenv()
 download_nltk_data()
 
+# Error handling for transformers import
+try:
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+except ImportError:
+    st.error("🚨 Error loading transformers library. Attempting to reinstall...")
+    import subprocess
+    subprocess.run(["pip", "install", "--force-reinstall", "transformers==4.36.0", "torch==2.5.1"])
+    from transformers import AutoTokenizer, AutoModelForSequenceClassification, pipeline
+    
 NEWS_API_KEY = st.secrets["general"]["NEWS_API_KEY"]
 TWITTER_BEARER_TOKEN = st.secrets["twitter"]["TWITTER_BEARER_TOKEN"]
 SLACK_TOKEN = st.secrets["slack"]["SLACK_TOKEN"]
@@ -56,14 +65,35 @@ class MisinformationDetector:
             self.stop_words = set(stopwords.words('english'))
         except LookupError as e:
             print(f"Error loading NLTK resources: {e}")
-            # Fallback initialization
             self.punkt_tokenizer = None
             self.word_tokenizer = None
             self.stop_words = set()
             
-        self.classifier = pipeline("zero-shot-classification", 
-                                 model="facebook/bart-large-mnli")
-        self.sentiment_analyzer = pipeline("sentiment-analysis")
+        # Initialize transformers with error handling
+        try:
+            # Load classification model
+            self.classifier = pipeline(
+                "zero-shot-classification",
+                model="facebook/bart-large-mnli",
+                device=-1  # Use CPU
+            )
+            
+            # Load sentiment model
+            self.sentiment_analyzer = pipeline(
+                "sentiment-analysis",
+                model="distilbert-base-uncased-finetuned-sst-2-english",
+                device=-1  # Use CPU
+            )
+        except Exception as e:
+            st.error(f"Error initializing transformers models: {str(e)}")
+            # Provide fallback functionality
+            self.classifier = lambda x, candidate_labels: {
+                "labels": candidate_labels,
+                "scores": [0.33, 0.33, 0.34]
+            }
+            self.sentiment_analyzer = lambda x: [{"label": "NEUTRAL", "score": 0.5}]
+        
+        # Initialize other components
         self.fact_checker = FactChecker()
         self.source_checker = SourceChecker()
         self.alert_system = AlertSystem()
@@ -1786,10 +1816,42 @@ def knowledge_graph_tab():
                 st.info("No entities found matching the criteria.")
         else:
             st.warning("Please select at least one entity type.")
-                          
+
+@st.cache_resource
+def load_transformers_models():
+    """Load and cache transformer models"""
+    try:
+        classifier = pipeline(
+            "zero-shot-classification",
+            model="facebook/bart-large-mnli",
+            device=-1
+        )
+        sentiment_analyzer = pipeline(
+            "sentiment-analysis",
+            model="distilbert-base-uncased-finetuned-sst-2-english",
+            device=-1
+        )
+        return classifier, sentiment_analyzer
+    except Exception as e:
+        st.error(f"Error loading models: {str(e)}")
+        return None, None
+                              
 def main():
     # Must be the first Streamlit command
-    st.set_page_config(page_title="Real-time Misinformation Detector", layout="wide")
+    st.set_page_config(
+        page_title="TrueTell",
+        page_icon="🔍",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
+    
+    # Load models at startup
+    if 'models_loaded' not in st.session_state:
+        with st.spinner("Loading models..."):
+            classifier, sentiment_analyzer = load_transformers_models()
+            st.session_state.models_loaded = True
+            st.session_state.classifier = classifier
+            st.session_state.sentiment_analyzer = sentiment_analyzer
     
     # Then add custom CSS
     st.markdown("""
