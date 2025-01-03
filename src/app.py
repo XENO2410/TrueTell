@@ -42,6 +42,11 @@ import networkx as nx
 from broadcast.stream import BroadcastStream, BroadcastMessage
 from broadcast.analyzer import BroadcastAnalyzer
 import plotly.graph_objects as go
+import warnings
+
+# Suppress specific warnings
+warnings.filterwarnings('ignore', category=FutureWarning)
+warnings.filterwarnings('ignore', message='.*torch.classes.*')
 
 # Load environment variables and download NLTK data
 load_dotenv()
